@@ -4,10 +4,10 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
 <title>Spielstatistik</title>
-<link rel="manifest" href="manifest.json">
+<link rel="manifest" href="/manifest.json">
 <meta name="theme-color" content="#14171c">
-<link rel="apple-touch-icon" href="icons/icon-192.png">
-<link rel="stylesheet" href="style.css">
+<link rel="apple-touch-icon" href="/icons/icon-192.png">
+<link rel="stylesheet" href="/style.css">
 <script>
 (function () {
   function showErr(msg) {
@@ -34,6 +34,7 @@
   <section class="screen active" id="screen-login">
     <h1>Konto</h1>
     <div id="loginForm">
+      <p class="hint" id="kundeSlugHint"></p>
       <div class="field">
         <label for="loginCode">Zugangscode</label>
         <input type="password" id="loginCode" placeholder="Code eingeben" autocomplete="off">
@@ -240,6 +241,6 @@
   </nav>
 
 </div>
-<script src="app.js"></script>
+<script src="/app.js"></script>
 </body>
 </html>

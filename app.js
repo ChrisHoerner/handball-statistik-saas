@@ -98,6 +98,15 @@ function authFetch(url, options) {
   return fetch(url, opts);
 }
 
+/* ---------- Kunden-Erkennung über den URL-Pfad (kein Login-Feld nötig) ----------
+ * .../sg-zeiskam -> Slug "sg-zeiskam". Nur beim Login relevant -- danach
+ * identifiziert allein das Session-Token den Kunden (siehe Worker).
+ */
+function getKundeSlugFromPath() {
+  const parts = location.pathname.split('/').filter(Boolean);
+  return parts.length ? parts[0] : '';
+}
+
 /* ---------- App-Zustand (nur im Speicher) ---------- */
 const state = {
   roster: [],
@@ -109,7 +118,8 @@ const state = {
   syncing: false,
   role: null,
   nutzerName: null,
-  sessionToken: null
+  sessionToken: null,
+  kundeSlug: getKundeSlugFromPath()
 };
 
 /* ---------- Initialisierung ---------- */
@@ -142,6 +152,19 @@ function updateLoginScreenView() {
   document.getElementById('logoutForm').style.display = state.role ? '' : 'none';
   if (state.role) {
     document.getElementById('loggedInAs').textContent = 'Angemeldet als: ' + state.nutzerName + (state.role === 'admin' ? ' (Admin)' : '');
+    return;
+  }
+  const slugEl = document.getElementById('kundeSlugHint');
+  const codeInput = document.getElementById('loginCode');
+  const loginBtn = document.getElementById('btnLogin');
+  if (state.kundeSlug) {
+    slugEl.textContent = 'Verein: ' + state.kundeSlug;
+    codeInput.disabled = false;
+    loginBtn.disabled = false;
+  } else {
+    slugEl.textContent = 'Kein Vereins-Link erkannt. Bitte den Link deines Vereins verwenden (z. B. .../sg-zeiskam).';
+    codeInput.disabled = true;
+    loginBtn.disabled = true;
   }
 }
 
@@ -149,7 +172,7 @@ async function postLoginInit() {
   document.getElementById('statusbar').style.display = '';
 
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('sw.js').catch(function (e) { console.warn('SW-Fehler', e); });
+    navigator.serviceWorker.register('/sw.js').catch(function (e) { console.warn('SW-Fehler', e); });
   }
 
   const s2 = await idbGet('settings', 'runde');
@@ -217,7 +240,7 @@ function bindUI() {
       const res = await authFetch(API_BASE + '?action=login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code: code })
+        body: JSON.stringify({ code: code, slug: state.kundeSlug })
       });
       const data = await res.json();
       if (!res.ok || data.error) { errorEl.textContent = data.error || 'Anmeldung fehlgeschlagen.'; return; }
