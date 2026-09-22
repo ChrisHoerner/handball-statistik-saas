@@ -102,9 +102,14 @@ function authFetch(url, options) {
  * .../sg-zeiskam -> Slug "sg-zeiskam". Nur beim Login relevant -- danach
  * identifiziert allein das Session-Token den Kunden (siehe Worker).
  */
-function getKundeSlugFromPath() {
+/* ---------- Verein/Mannschaft-Erkennung über den URL-Pfad ----------
+ * .../sg-zeiskam/damen -> vereinSlug "sg-zeiskam", mannschaftSlug "damen".
+ * Nur beim Login relevant -- danach identifiziert allein das Session-Token
+ * die Mannschaft (siehe Worker).
+ */
+function getSlugsFromPath() {
   const parts = location.pathname.split('/').filter(Boolean);
-  return parts.length ? parts[0] : '';
+  return { verein: parts[0] || '', mannschaft: parts[1] || '' };
 }
 
 /* ---------- App-Zustand (nur im Speicher) ---------- */
@@ -119,7 +124,8 @@ const state = {
   role: null,
   nutzerName: null,
   sessionToken: null,
-  kundeSlug: getKundeSlugFromPath()
+  vereinSlug: getSlugsFromPath().verein,
+  mannschaftSlug: getSlugsFromPath().mannschaft
 };
 
 /* ---------- Initialisierung ---------- */
@@ -157,12 +163,12 @@ function updateLoginScreenView() {
   const slugEl = document.getElementById('kundeSlugHint');
   const codeInput = document.getElementById('loginCode');
   const loginBtn = document.getElementById('btnLogin');
-  if (state.kundeSlug) {
-    slugEl.textContent = 'Verein: ' + state.kundeSlug;
+  if (state.vereinSlug && state.mannschaftSlug) {
+    slugEl.textContent = 'Verein: ' + state.vereinSlug + ' / Mannschaft: ' + state.mannschaftSlug;
     codeInput.disabled = false;
     loginBtn.disabled = false;
   } else {
-    slugEl.textContent = 'Kein Vereins-Link erkannt. Bitte den Link deines Vereins verwenden (z. B. .../sg-zeiskam).';
+    slugEl.textContent = 'Kein Vereins-/Mannschafts-Link erkannt. Bitte den Link deiner Mannschaft verwenden (z. B. .../sg-zeiskam/damen).';
     codeInput.disabled = true;
     loginBtn.disabled = true;
   }
@@ -240,7 +246,7 @@ function bindUI() {
       const res = await authFetch(API_BASE + '?action=login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code: code, slug: state.kundeSlug })
+        body: JSON.stringify({ code: code, vereinSlug: state.vereinSlug, mannschaftSlug: state.mannschaftSlug })
       });
       const data = await res.json();
       if (!res.ok || data.error) { errorEl.textContent = data.error || 'Anmeldung fehlgeschlagen.'; return; }
