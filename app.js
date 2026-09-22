@@ -82,15 +82,21 @@ function idbClear(name) {
 }
 
 /* ---------- Zugang / Rollen ----------
- * Einfache Codes, kein echtes Login-System – reicht, um zu verhindern,
- * dass Helferinnen versehentlich Einstellungen/Auswertung anfassen.
- * Codes hier bei Bedarf anpassen.
+ * Codes werden serverseitig gegen D1 geprüft (siehe /api/proxy?action=login
+ * im Worker) -- hier liegt nichts mehr im Klartext. Login braucht einmalig
+ * Internet, wie "Kader jetzt laden"; danach läuft die Session offline weiter,
+ * solange der Token gültig ist (180 Tage, siehe Worker SESSION_TTL_TAGE).
  */
-const ADMIN_CODE = 'admin2026';
-const NUTZER_CODES = { nutzer1: 'Nutzer 1', nutzer2: 'Nutzer 2', nutzer3: 'Nutzer 3' };
 
-/* ---------- Feste Adresse der eigenen Vercel-Vermittlerfunktion ---------- */
+/* ---------- Feste Adresse des eigenen Worker-Endpunkts ---------- */
 const API_BASE = '/api/proxy';
+
+/* ---------- fetch mit Session-Token, für alle API_BASE-Aufrufe ---------- */
+function authFetch(url, options) {
+  const opts = options || {};
+  opts.headers = Object.assign({}, opts.headers, state.sessionToken ? { 'Authorization': 'Bearer ' + state.sessionToken } : {});
+  return fetch(url, opts);
+}
 
 /* ---------- App-Zustand (nur im Speicher) ---------- */
 const state = {
@@ -102,7 +108,8 @@ const state = {
   activeRosterNames: null,
   syncing: false,
   role: null,
-  nutzerName: null
+  nutzerName: null,
+  sessionToken: null
 };
 
 /* ---------- Initialisierung ---------- */
@@ -113,8 +120,10 @@ async function init() {
   bindUI();
 
   const savedRole = await idbGet('settings', 'role');
-  if (savedRole && savedRole.value) {
+  const savedToken = await idbGet('settings', 'sessionToken');
+  if (savedRole && savedRole.value && savedToken && savedToken.value) {
     state.role = savedRole.value;
+    state.sessionToken = savedToken.value;
     const savedName = await idbGet('settings', 'nutzerName');
     state.nutzerName = savedName ? savedName.value : (state.role === 'admin' ? 'Admin' : 'Nutzer');
   }
@@ -170,6 +179,7 @@ async function postLoginInit() {
 
 async function doLogout() {
   await idbPut('settings', { key: 'role', value: null });
+  await idbPut('settings', { key: 'sessionToken', value: null });
   location.reload();
 }
 
@@ -197,24 +207,36 @@ function bindUI() {
   });
 
   document.getElementById('btnLogin').addEventListener('click', async function () {
-    const code = document.getElementById('loginCode').value.trim().toLowerCase();
+    const code = document.getElementById('loginCode').value.trim();
     const errorEl = document.getElementById('loginError');
-    let role = null, name = null;
-    if (code === ADMIN_CODE.toLowerCase()) {
-      role = 'admin'; name = 'Admin';
-    } else if (NUTZER_CODES[code]) {
-      role = 'nutzer'; name = NUTZER_CODES[code];
-    }
-    if (!role) { errorEl.textContent = 'Unbekannter Code.'; return; }
-    await idbPut('settings', { key: 'role', value: role });
-    await idbPut('settings', { key: 'nutzerName', value: name });
-    state.role = role;
-    state.nutzerName = name;
-    document.getElementById('loginCode').value = '';
+    const btn = document.getElementById('btnLogin');
+    if (!code) { errorEl.textContent = 'Code eingeben.'; return; }
     errorEl.textContent = '';
-    applyRoleRestrictions();
-    updateLoginScreenView();
-    await postLoginInit();
+    btn.disabled = true;
+    try {
+      const res = await authFetch(API_BASE + '?action=login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: code })
+      });
+      const data = await res.json();
+      if (!res.ok || data.error) { errorEl.textContent = data.error || 'Anmeldung fehlgeschlagen.'; return; }
+
+      await idbPut('settings', { key: 'role', value: data.rolle });
+      await idbPut('settings', { key: 'nutzerName', value: data.name });
+      await idbPut('settings', { key: 'sessionToken', value: data.token });
+      state.role = data.rolle;
+      state.nutzerName = data.name;
+      state.sessionToken = data.token;
+      document.getElementById('loginCode').value = '';
+      applyRoleRestrictions();
+      updateLoginScreenView();
+      await postLoginInit();
+    } catch (e) {
+      errorEl.textContent = 'Kein Netz? Erste Anmeldung auf diesem Gerät braucht Internet. (' + e.message + ')';
+    } finally {
+      btn.disabled = false;
+    }
   });
 
   document.getElementById('btnLogout').addEventListener('click', doLogout);
@@ -312,7 +334,7 @@ async function loadRosterFromBackend() {
   const runde = document.getElementById('rundeSelect').value.trim();
   document.getElementById('rosterStatus').textContent = 'Lade …';
   try {
-    const res = await fetch(API_BASE + '?action=roster&runde=' + encodeURIComponent(runde));
+    const res = await authFetch(API_BASE + '?action=roster&runde=' + encodeURIComponent(runde));
     const data = await res.json();
     if (data.error) throw new Error(data.error);
 
@@ -597,7 +619,7 @@ function renderGamesInto(containerId, games, onContinue) {
 async function fetchRemoteSpiele() {
   if (!navigator.onLine) return null;
   try {
-    const res = await fetch(API_BASE + '?action=spiele');
+    const res = await authFetch(API_BASE + '?action=spiele');
     const data = await res.json();
     return Array.isArray(data) ? data : null;
   } catch (e) {
@@ -870,7 +892,7 @@ async function trySyncInner(manual) {
   }
 
   try {
-    const res = await fetch(API_BASE, {
+    const res = await authFetch(API_BASE, {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain' },
       body: JSON.stringify({ spiele: games, aktionen: events, kader: kaderChanges, kader_runde: kaderRundeChanges })
@@ -944,7 +966,7 @@ async function populateAuswertungSelects() {
   zeitraumSelect.innerHTML = '<option value="runde">Ganze Runde (' + (state.runde || '–') + ')</option>';
 
   try {
-    const res = await fetch(API_BASE + '?action=spiele');
+    const res = await authFetch(API_BASE + '?action=spiele');
     const spiele = await res.json();
     spiele
       .filter(function (s) { return s.Runde === state.runde; })
@@ -985,7 +1007,7 @@ async function showAuswertung() {
       return;
     }
     try {
-      const res = await fetch(API_BASE + '?action=auswertungSpielTeam&spielId=' + encodeURIComponent(zeitraum));
+      const res = await authFetch(API_BASE + '?action=auswertungSpielTeam&spielId=' + encodeURIComponent(zeitraum));
       const data = await res.json();
       if (data.error) throw new Error(data.error);
       lastAuswertungExport = { type: 'team', data: data, spielInfo: spielInfo };
@@ -1000,11 +1022,11 @@ async function showAuswertung() {
   try {
     let row = null;
     if (zeitraum === 'runde') {
-      const res = await fetch(API_BASE + '?action=auswertungSpielerin');
+      const res = await authFetch(API_BASE + '?action=auswertungSpielerin');
       const rows = await res.json();
       row = rows.find(function (r) { return r.Name === name && r.Runde === state.runde; });
     } else {
-      const res = await fetch(API_BASE + '?action=auswertungSpiel');
+      const res = await authFetch(API_BASE + '?action=auswertungSpiel');
       const rows = await res.json();
       row = rows.find(function (r) { return r.Name === name && r.SpielID === zeitraum; });
     }
@@ -1156,7 +1178,7 @@ async function exportAktionenCSV() {
   if (zeitraum === 'runde') { alert('Bitte oben ein einzelnes Spiel auswählen (nicht „Ganze Runde"), um die Einzelaktionen zu exportieren.'); return; }
   const info = selectedSpielInfo();
   try {
-    const res = await fetch(API_BASE + '?action=aktionenSpiel&spielId=' + encodeURIComponent(zeitraum));
+    const res = await authFetch(API_BASE + '?action=aktionenSpiel&spielId=' + encodeURIComponent(zeitraum));
     const data = await res.json();
     if (data.error) throw new Error(data.error);
     const rows = [['AktionID', 'SpielID', 'SpielerinID', 'Halbzeit', 'Aktionstyp', 'Ergebnis', 'Quelle', 'Zeitstempel']];
@@ -1252,7 +1274,7 @@ async function showErfasserUebersicht() {
   el.innerHTML = '<p class="aus-empty">Lade …</p>';
   lastAuswertungExport = null;
   try {
-    const res = await fetch(API_BASE + '?action=aktionenSpiel&spielId=' + encodeURIComponent(zeitraum));
+    const res = await authFetch(API_BASE + '?action=aktionenSpiel&spielId=' + encodeURIComponent(zeitraum));
     const data = await res.json();
     if (data.error) throw new Error(data.error);
     const counts = {};
