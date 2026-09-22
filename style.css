@@ -66,7 +66,7 @@ button {
 #syncBtn:active { background: var(--accent); }
 
 /* --- Screens --- */
-.screen { display: none; padding: 1rem; flex: 1; }
+.screen { display: none; padding: 1rem 1rem calc(5rem + env(safe-area-inset-bottom, 0)) 1rem; flex: 1; }
 .screen.active { display: flex; flex-direction: column; gap: 1rem; }
 
 h1 { font-size: 1.3rem; margin: 0 0 0.3rem; }
@@ -107,6 +107,16 @@ input[type="text"], input[type="date"], input[type="url"], select {
 }
 
 /* --- Live-Erfassung --- */
+#btnEditSquad { margin-bottom: 0.3rem; align-self: flex-start; }
+
+#liveScore {
+  text-align: center;
+  font-size: 1.6rem;
+  font-weight: 700;
+  padding: 0.3rem 0 0.6rem;
+  letter-spacing: 0.05em;
+}
+
 #halbzeitToggle { display: flex; gap: 0.5rem; }
 #halbzeitToggle button {
   flex: 1;
@@ -119,11 +129,34 @@ input[type="text"], input[type="date"], input[type="url"], select {
 }
 #halbzeitToggle button.active { background: var(--accent); color: #14171c; border-color: var(--accent); }
 
-#playerStrip {
+.player-group-label {
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin: 0.5rem 0 0.3rem;
+}
+.player-group-label:first-of-type { margin-top: 0; }
+
+.player-grid-feld {
   display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.player-row {
+  display: flex;
+  flex-wrap: wrap;
   gap: 0.5rem;
-  overflow-x: auto;
-  padding-bottom: 0.3rem;
+  justify-content: flex-start;
+}
+.player-grid-tw {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  justify-content: flex-end;
+  border-top: 1px solid var(--line);
+  padding-top: 0.6rem;
+  margin-top: 0.4rem;
 }
 .player-chip {
   flex-shrink: 0;
@@ -141,24 +174,36 @@ input[type="text"], input[type="date"], input[type="url"], select {
 .action-group { background: var(--panel); border-radius: 0.7rem; padding: 0.7rem; }
 .action-group h2 { margin-bottom: 0.6rem; }
 
-.wurf-row {
+.court-row {
   display: grid;
-  grid-template-columns: 1fr auto auto;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.3rem 0;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 0.8rem;
+  margin-bottom: 0.8rem;
 }
-.wurf-row .zone { font-size: 0.95rem; }
-.wurf-row button {
-  padding: 0.7rem 1rem;
-  border-radius: 0.5rem;
+.zone-tile {
+  background: var(--panel-raised);
+  border: 1px solid var(--line);
+  border-radius: 0.6rem;
+  overflow: hidden;
+}
+.zone-label {
+  text-align: center;
   font-weight: 700;
-  min-width: 4.5rem;
+  padding: 0.6rem 0.4rem;
+  border-bottom: 1px solid var(--line);
 }
-.wurf-row .btn-treffer { background: var(--hit); color: #0e1712; }
-.wurf-row .btn-treffer:active { filter: brightness(1.15); }
-.wurf-row .btn-fehlwurf { background: var(--panel-raised); color: var(--text-dim); border: 1px solid var(--line); }
-.wurf-row .btn-fehlwurf:active { background: var(--miss); color: #fff; }
+.zone-buttons { display: flex; flex-direction: column; }
+.zone-buttons button {
+  width: 100%;
+  padding: 0.9rem 0.4rem;
+  font-size: 0.95rem;
+  font-weight: 700;
+  border-radius: 0;
+}
+.zone-buttons .btn-fehlwurf { background: var(--panel-raised); color: var(--text-dim); }
+.zone-buttons .btn-fehlwurf:active { background: var(--miss); color: #fff; }
+.zone-buttons .btn-treffer { background: var(--hit); color: #0e1712; }
+.zone-buttons .btn-treffer:active { filter: brightness(1.15); }
 
 .btn-grid {
   display: grid;
@@ -201,6 +246,12 @@ nav.tabbar {
   display: flex;
   border-top: 1px solid var(--line);
   background: var(--panel-raised);
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 20;
+  padding-bottom: max(env(safe-area-inset-bottom, 0px), 20px);
 }
 nav.tabbar button {
   flex: 1;
@@ -211,3 +262,10 @@ nav.tabbar button {
   font-weight: 600;
 }
 nav.tabbar button.active { color: var(--accent); }
+
+/* --- Auswertung --- */
+.aus-table { width: 100%; border-collapse: collapse; margin-bottom: 0.8rem; font-size: 0.9rem; }
+.aus-table th, .aus-table td { text-align: left; padding: 0.4rem 0.5rem; border-bottom: 1px solid var(--line); }
+.aus-table th { color: var(--text-dim); font-weight: 600; }
+.aus-section-title { font-weight: 700; margin: 1rem 0 0.4rem; }
+.aus-empty { color: var(--text-dim); font-size: 0.9rem; }

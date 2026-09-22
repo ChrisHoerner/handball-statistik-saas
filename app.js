@@ -760,34 +760,54 @@ function toggleTwView(isTw) {
   if (isTw) renderTwRows();
 }
 
-function renderWurfRows() {
-  const el = document.getElementById('wurfRows');
+/* Reihenfolge und Paarung exakt wie im bestätigten Vereins-Layout:
+   Außen+Kreis / 6m+9m / 7m+Konter -- unabhängig von der internen
+   WURF_ZONEN-Reihenfolge, die für Auswertung/Export weiterläuft. */
+const COURT_ROWS = [['Außen', 'Kreis'], ['6m', '9m'], ['7m', 'Konter']];
+
+function buildZoneTile(zone, hitLabel, missLabel, hitValue, missValue) {
+  const tile = document.createElement('div');
+  tile.className = 'zone-tile';
+  const label = document.createElement('div');
+  label.className = 'zone-label';
+  label.textContent = zone;
+  const btns = document.createElement('div');
+  btns.className = 'zone-buttons';
+  const missBtn = document.createElement('button');
+  missBtn.className = 'btn-fehlwurf';
+  missBtn.textContent = missLabel;
+  missBtn.addEventListener('click', function () { addEvent(zone, missValue); });
+  const hitBtn = document.createElement('button');
+  hitBtn.className = 'btn-treffer';
+  hitBtn.textContent = hitLabel;
+  hitBtn.addEventListener('click', function () { addEvent(zone, hitValue); });
+  btns.appendChild(missBtn);
+  btns.appendChild(hitBtn);
+  tile.appendChild(label);
+  tile.appendChild(btns);
+  return tile;
+}
+
+function renderCourtGrid(containerId, hitLabel, missLabel) {
+  const el = document.getElementById(containerId);
   el.innerHTML = '';
-  WURF_ZONEN.forEach(function (zone) {
+  COURT_ROWS.forEach(function (pair) {
     const row = document.createElement('div');
-    row.className = 'wurf-row';
-    row.innerHTML = '<span class="zone">' + zone + '</span>' +
-      '<button class="btn-fehlwurf">Fehlwurf</button>' +
-      '<button class="btn-treffer">Treffer</button>';
-    row.querySelector('.btn-treffer').addEventListener('click', function () { addEvent(zone, 'Treffer'); });
-    row.querySelector('.btn-fehlwurf').addEventListener('click', function () { addEvent(zone, 'Fehlwurf'); });
+    row.className = 'court-row court-row-2';
+    pair.forEach(function (zone) {
+      row.appendChild(buildZoneTile(zone, hitLabel, missLabel, hitLabel, missLabel));
+    });
     el.appendChild(row);
   });
 }
 
+function renderWurfRows() {
+  renderCourtGrid('wurfRows', 'Treffer', 'Fehlwurf');
+}
+
 function renderTwRows() {
+  renderCourtGrid('twRows', 'Parade', 'Gegentor');
   const el = document.getElementById('twRows');
-  el.innerHTML = '';
-  WURF_ZONEN.forEach(function (zone) {
-    const row = document.createElement('div');
-    row.className = 'wurf-row';
-    row.innerHTML = '<span class="zone">' + zone + '</span>' +
-      '<button class="btn-fehlwurf">Gegentor</button>' +
-      '<button class="btn-treffer">Parade</button>';
-    row.querySelector('.btn-treffer').addEventListener('click', function () { addEvent(zone, 'Parade'); });
-    row.querySelector('.btn-fehlwurf').addEventListener('click', function () { addEvent(zone, 'Gegentor'); });
-    el.appendChild(row);
-  });
   const extra = document.createElement('div');
   extra.className = 'btn-grid';
   extra.style.marginTop = '0.6rem';
