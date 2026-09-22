@@ -79,12 +79,17 @@ function bearerToken(request) {
 async function handleLogin(request, env) {
   const body = await request.json();
   const code = (body.code || '').trim();
+  const slug = (body.slug || '').trim();
+  if (!slug) return json({ error: 'Kein Vereins-Link erkannt.' }, 400);
   if (!code) return json({ error: 'Code fehlt' }, 400);
+
+  const kunde = await env.DB.prepare('SELECT id FROM kunden WHERE slug = ?').bind(slug).first();
+  if (!kunde) return json({ error: 'Unbekannter Vereins-Link.' }, 404);
 
   const codeHash = await sha256Hex(code);
   const row = await env.DB.prepare(
-    'SELECT id, kunde_id, rolle, anzeige_name FROM zugangscodes WHERE code_hash = ? AND aktiv = 1'
-  ).bind(codeHash).first();
+    'SELECT id, kunde_id, rolle, anzeige_name FROM zugangscodes WHERE kunde_id = ? AND code_hash = ? AND aktiv = 1'
+  ).bind(kunde.id, codeHash).first();
   if (!row) return json({ error: 'Unbekannter Code' }, 401);
 
   const token = uid();
