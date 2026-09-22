@@ -6,9 +6,9 @@
  *    Sync-Upsert (spiele/aktionen/kader/kader_runde) gegen D1
  *  - alles andere: Weiterreichen an die statischen Assets (index.html, app.js, ...)
  *
- * NICHT enthalten (bewusst, siehe Chat-Notiz "kein stilles Loch"):
- *  - CSV-Komplettexport (Kunde exportiert alle eigenen Daten) -> eigener Schritt lt. Roadmap
- * Auswertung (pro Spielerin/Team, halbzeitfein) und Aktionen-Abruf sind implementiert.
+ * Auswertung (pro Spielerin/Team, halbzeitfein), Aktionen-Abruf und der
+ * vollständige CSV-Export (Datenhoheit des Kunden, Punkt 4 der
+ * Architekturentscheidung) sind implementiert.
  *
  * Einmalig vor erstem Login nötig (siehe README-Abschnitt "D1 Setup"):
  *  1. Schema anwenden:  wrangler d1 execute handball-statistik-saas-db --remote --file=./d1-schema.sql
@@ -255,6 +255,32 @@ async function handleAuswertung(request, env, session, url) {
 
   return json({ error: 'scope muss spielerin oder team sein' }, 400);
 }
+/* ---------- Vollständiger Datenexport (Datenhoheit, ersetzt "eigenes Google Sheet") ---------- */
+async function handleExportAll(env, session) {
+  if (session.rolle !== 'admin') return json({ error: 'Nur Admin darf den Komplettexport auslösen.' }, 403);
+
+  const kader = await env.DB.prepare(
+    'SELECT id AS SpielerinID, name AS Name, rueckennummer AS Rückennummer, position AS Position FROM kader WHERE kunde_id = ?'
+  ).bind(session.kunde_id).all();
+  const kaderRunde = await env.DB.prepare(
+    'SELECT kader_id AS SpielerinID, runde AS Runde, status AS Status FROM kader_runde WHERE kunde_id = ?'
+  ).bind(session.kunde_id).all();
+  const spiele = await env.DB.prepare(
+    'SELECT id AS SpielID, datum AS Datum, gegner AS Gegner, runde AS Runde, tore_eigene AS Tore_eigene, tore_gegner AS Tore_gegner, status AS Status FROM spiele WHERE kunde_id = ?'
+  ).bind(session.kunde_id).all();
+  const aktionen = await env.DB.prepare(
+    'SELECT id AS AktionID, spiel_id AS SpielID, spielerin_id AS SpielerinID, halbzeit AS Halbzeit, aktionstyp AS Aktionstyp, ergebnis AS Ergebnis, quelle AS Quelle, zeitstempel AS Zeitstempel FROM aktionen WHERE kunde_id = ?'
+  ).bind(session.kunde_id).all();
+
+  return json({
+    kader: kader.results || [],
+    kader_runde: kaderRunde.results || [],
+    spiele: spiele.results || [],
+    aktionen: aktionen.results || []
+  });
+}
+
+/* ---------- Router ---------- */
 async function handleApi(request, env, url) {
   if (url.searchParams.get('action') === 'login' || (request.method === 'POST' && url.searchParams.get('action') === undefined && url.pathname.endsWith('/login'))) {
     // Login ist der einzige Endpunkt ohne Session.
@@ -286,6 +312,9 @@ async function handleApi(request, env, url) {
   }
   if (request.method === 'GET' && action === 'auswertung') {
     return handleAuswertung(request, env, session, url);
+  }
+  if (request.method === 'GET' && action === 'exportAll') {
+    return handleExportAll(env, session);
   }
 
   return json({ error: 'Unbekannte Aktion: ' + action }, 404);
