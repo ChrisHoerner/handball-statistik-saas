@@ -62,7 +62,7 @@ function uid() {
 async function getSession(env, token) {
   if (!token) return null;
   const row = await env.DB.prepare(
-    'SELECT s.token, s.mannschaft_id, s.rolle, s.expires_at FROM sessions s WHERE s.token = ?'
+    'SELECT s.token, s.mannschaft_id, s.zugangscode_id, s.rolle, s.expires_at FROM sessions s WHERE s.token = ?'
   ).bind(token).first();
   if (!row) return null;
   if (new Date(row.expires_at) < new Date()) return null;
@@ -289,6 +289,31 @@ async function handleExportAll(env, session) {
   });
 }
 
+/* ---------- Eigenen Code ändern (kein Eingriff durch den Anbieter nötig) ---------- */
+async function handleChangeCode(request, env, session) {
+  const body = await request.json();
+  const alterCode = (body.alterCode || '').trim();
+  const neuerCode = (body.neuerCode || '').trim();
+  if (!alterCode || !neuerCode) return json({ error: 'Beide Felder ausfüllen.' }, 400);
+  if (neuerCode.length < 4) return json({ error: 'Neuer Code muss mindestens 4 Zeichen haben.' }, 400);
+
+  const row = await env.DB.prepare('SELECT code_hash FROM zugangscodes WHERE id = ? AND mannschaft_id = ?')
+    .bind(session.zugangscode_id, session.mannschaft_id).first();
+  if (!row) return json({ error: 'Zugangscode nicht gefunden.' }, 404);
+
+  const alterHash = await sha256Hex(alterCode);
+  if (alterHash !== row.code_hash) return json({ error: 'Aktueller Code ist falsch.' }, 401);
+
+  const neuerHash = await sha256Hex(neuerCode);
+  const kollision = await env.DB.prepare(
+    'SELECT id FROM zugangscodes WHERE mannschaft_id = ? AND code_hash = ? AND id != ? AND aktiv = 1'
+  ).bind(session.mannschaft_id, neuerHash, session.zugangscode_id).first();
+  if (kollision) return json({ error: 'Dieser Code wird bereits von einer anderen Rolle in eurer Mannschaft genutzt.' }, 409);
+
+  await env.DB.prepare('UPDATE zugangscodes SET code_hash = ? WHERE id = ?').bind(neuerHash, session.zugangscode_id).run();
+  return json({ status: 'ok' });
+}
+
 /* ---------- Router ---------- */
 async function handleApi(request, env, url) {
   if (url.searchParams.get('action') === 'login' || (request.method === 'POST' && url.searchParams.get('action') === undefined && url.pathname.endsWith('/login'))) {
@@ -324,6 +349,9 @@ async function handleApi(request, env, url) {
   }
   if (request.method === 'GET' && action === 'exportAll') {
     return handleExportAll(env, session);
+  }
+  if (request.method === 'POST' && action === 'changeCode') {
+    return handleChangeCode(request, env, session);
   }
 
   return json({ error: 'Unbekannte Aktion: ' + action }, 404);
