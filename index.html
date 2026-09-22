@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<title>Spielstatistik</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#14171c">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<link rel="stylesheet" href="style.css">
+<script>
+(function () {
+  function showErr(msg) {
+    var d = document.createElement('div');
+    d.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;background:#b03030;color:#fff;padding:0.7rem;font-size:0.75rem;font-family:monospace;white-space:pre-wrap;max-height:40vh;overflow-y:auto;';
+    d.textContent = 'Fehler: ' + msg;
+    document.addEventListener('DOMContentLoaded', function () { document.body.appendChild(d); });
+    if (document.body) document.body.appendChild(d);
+  }
+  window.addEventListener('error', function (e) {
+    showErr((e.message || 'Unbekannt') + '\n(' + (e.filename || '') + ':' + e.lineno + ':' + e.colno + ')');
+  });
+  window.addEventListener('unhandledrejection', function (e) {
+    var r = e.reason;
+    showErr('Promise: ' + (r && r.message ? r.message + '\n' + (r.stack || '') : String(r)));
+  });
+})();
+</script>
+</head>
+<body>
+<div id="app">
+
+  <!-- SCREEN: Konto (An-/Abmeldung) -->
+  <section class="screen active" id="screen-login">
+    <h1>Konto</h1>
+    <div id="loginForm">
+      <div class="field">
+        <label for="loginCode">Zugangscode</label>
+        <input type="password" id="loginCode" placeholder="Code eingeben" autocomplete="off">
+      </div>
+      <button class="primary-btn" id="btnLogin">Anmelden</button>
+      <p class="hint" id="loginError"></p>
+    </div>
+    <div id="logoutForm" style="display:none">
+      <p class="hint" id="loggedInAs"></p>
+      <button class="secondary-btn" id="btnLogout">Abmelden</button>
+    </div>
+
+    <h2 style="margin-top:1.2rem">Nach einem Update</h2>
+    <button class="secondary-btn" id="btnForceUpdate">App-Version aktualisieren</button>
+    <p class="hint">Lädt die App-Dateien neu (nötig nach jeder Änderung durch mich). Kader und gespeicherte Spiele/Aktionen bleiben erhalten.</p>
+  </section>
+
+  <div id="statusbar" style="display:none">
+    <div class="dot offline" id="statusDot"></div>
+    <span id="pending">wird geladen …</span>
+    <button id="syncBtn">Jetzt synchronisieren</button>
+  </div>
+
+  <!-- SCREEN: Einstellungen -->
+  <section class="screen" id="screen-settings">
+    <h1>Einstellungen</h1>
+    <div class="field">
+      <label for="rundeSelect">Aktuelle Runde</label>
+      <input type="text" id="rundeSelect" placeholder="2026/27 Rückrunde">
+    </div>
+    <button class="primary-btn" id="btnSaveSettings">Speichern</button>
+    <button class="secondary-btn" id="btnLoadRoster">Kader jetzt laden (braucht Internet)</button>
+    <p class="hint" id="rosterStatus">Noch kein Kader geladen.</p>
+  </section>
+
+  <!-- SCREEN: Spiel anlegen -->
+  <section class="screen" id="screen-game">
+    <div id="newGameForm">
+      <h1>Neues Spiel</h1>
+      <div class="field">
+        <label for="gDatum">Datum</label>
+        <input type="date" id="gDatum">
+      </div>
+      <div class="field">
+        <label for="gGegner">Gegner</label>
+        <input type="text" id="gGegner" placeholder="z. B. HSG Hunsrück">
+      </div>
+      <div class="field">
+        <label for="gRunde">Runde</label>
+        <input type="text" id="gRunde" placeholder="2026/27 Rückrunde">
+      </div>
+      <button class="primary-btn" id="btnStartGame">Spiel starten</button>
+    </div>
+
+    <h2 style="margin-top:1rem">Laufende / letzte Spiele</h2>
+    <div id="gameList"></div>
+  </section>
+
+  <!-- SCREEN: Kader verwalten (Stammdaten, admin-only) -->
+  <section class="screen" id="screen-kader">
+    <h1>Kader verwalten</h1>
+    <p class="hint">Änderungen gelten sofort für die aktuelle Runde (<span id="kaderRundeLabel"></span>) und werden auch offline gespeichert.</p>
+    <button class="primary-btn" id="btnKaderNeu">+ Neue Spielerin</button>
+    <div id="kaderList" style="margin-top:0.8rem"></div>
+
+    <div id="kaderForm" style="display:none; margin-top:1rem" class="action-group">
+      <h2 id="kaderFormTitle">Neue Spielerin</h2>
+      <div class="field">
+        <label for="kName">Name</label>
+        <input type="text" id="kName">
+      </div>
+      <div class="field">
+        <label for="kNummer">Rückennummer</label>
+        <input type="text" id="kNummer" inputmode="numeric">
+      </div>
+      <div class="field">
+        <label for="kPosition">Position</label>
+        <select id="kPosition">
+          <option value="Feld">Feld</option>
+          <option value="TW">TW</option>
+        </select>
+      </div>
+      <button class="primary-btn" id="btnKaderSpeichern">Speichern</button>
+      <button class="secondary-btn" id="btnKaderAbbrechen" style="margin-top:0.5rem">Abbrechen</button>
+      <p class="hint" id="kaderFormError"></p>
+    </div>
+  </section>
+
+  <!-- SCREEN: Spieltags-Kader -->
+  <section class="screen" id="screen-squad">
+    <h1>Kader für dieses Spiel</h1>
+    <p class="hint">Nicht angehakte Spielerinnen erscheinen nicht in der Erfassung.</p>
+    <div id="squadList"></div>
+    <button class="primary-btn" id="btnSquadConfirm">Weiter zur Erfassung</button>
+  </section>
+
+  <!-- SCREEN: Live-Erfassung -->
+  <section class="screen" id="screen-live">
+    <div id="liveGamePicker" style="display:none">
+      <h2>Spiel fortsetzen</h2>
+      <div id="liveGameList"></div>
+    </div>
+
+    <div id="liveMainArea">
+    <div style="display:flex; align-items:center; gap:0.5rem;">
+      <button class="secondary-btn" id="btnEditSquad">Kader für dieses Spiel bearbeiten</button>
+      <div id="liveGameName" style="flex:1; text-align:center; font-weight:700;"></div>
+    </div>
+    <div id="liveScore">–  :  –</div>
+    <div id="halbzeitToggle">
+      <button data-hz="1" class="active">1. Halbzeit</button>
+      <button data-hz="2">2. Halbzeit</button>
+    </div>
+
+    <div class="player-group-label">Feldspielerinnen</div>
+    <div id="playerStripFeld" class="player-grid player-grid-feld"></div>
+    <div class="player-group-label">Torhüterinnen</div>
+    <div id="playerStripTW" class="player-grid player-grid-tw"></div>
+
+    <div class="action-group" id="wurfGroup">
+      <h2>Wurf</h2>
+      <div id="wurfRows"></div>
+    </div>
+
+    <div class="action-group">
+      <h2>Ballgewinn</h2>
+      <div class="btn-grid" id="ballgewinnGrid"></div>
+    </div>
+
+    <div class="action-group">
+      <h2>Eigener Fehler</h2>
+      <div class="btn-grid" id="fehlerGrid"></div>
+    </div>
+
+    <div class="action-group">
+      <h2>Einzelereignisse</h2>
+      <div class="btn-grid" id="einzelGrid"></div>
+    </div>
+
+    <div class="action-group" id="twGroup" style="display:none">
+      <h2>Torwart</h2>
+      <div id="twRows"></div>
+    </div>
+
+    <div id="lastEvents">
+      <h2>Letzte Aktionen</h2>
+      <ul id="eventList"></ul>
+    </div>
+
+    <div id="endGameSection" style="display:none" class="action-group">
+      <h2>Aktuelles Spiel beenden</h2>
+      <div class="field">
+        <label for="eTore">Tore eigene</label>
+        <input type="text" id="eTore" inputmode="numeric">
+      </div>
+      <div class="field">
+        <label for="eGegentore">Tore Gegner</label>
+        <input type="text" id="eGegentore" inputmode="numeric">
+      </div>
+      <button class="primary-btn" id="btnEndGame">Spiel beenden</button>
+    </div>
+    </div>
+  </section>
+
+  <!-- SCREEN: Auswertung -->
+  <section class="screen" id="screen-auswertung">
+    <h1>Auswertung</h1>
+    <div class="field">
+      <label for="ausZeitraum">Zeitraum</label>
+      <select id="ausZeitraum"></select>
+    </div>
+    <div class="field">
+      <label for="ausSpielerin">Spielerin</label>
+      <select id="ausSpielerin"></select>
+    </div>
+    <label style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.8rem;">
+      <input type="checkbox" id="ausTeamGesamt" style="width:1.2rem;height:1.2rem;">
+      Team gesamt (statt einzelner Spielerin) – nur bei einzelnem Spiel
+    </label>
+    <button class="primary-btn" id="btnAuswertungAnzeigen">Anzeigen</button>
+    <button class="secondary-btn" id="btnErfasserUebersicht" style="margin-top:0.5rem">Aktionen nach Erfasser anzeigen</button>
+    <div id="ausErgebnis"></div>
+    <button class="secondary-btn" id="btnExportAuswertung" style="margin-top:0.8rem">Auswertung als CSV exportieren</button>
+    <button class="secondary-btn" id="btnExportAktionen" style="margin-top:0.5rem">Aktionen dieses Spiels als CSV exportieren</button>
+
+    <div class="field" style="margin-top:1.2rem">
+      <label for="importFile">Aktionen aus CSV importieren (z. B. vorherige Export-Datei)</label>
+      <input type="file" id="importFile" accept=".csv,text/csv">
+      <p class="hint">Enthaltene AktionID wird beibehalten – ein bereits synchronisierter Import erzeugt beim erneuten Einlesen keine Duplikate.</p>
+    </div>
+  </section>
+
+  <nav class="tabbar" id="tabbar" style="display:none">
+    <button data-screen="settings" class="tab active">Einstellungen</button>
+    <button data-screen="kader" class="tab">Kader</button>
+    <button data-screen="game" class="tab">Spiel</button>
+    <button data-screen="live" class="tab">Erfassung</button>
+    <button data-screen="auswertung" class="tab">Auswertung</button>
+    <button data-screen="login" class="tab">Konto</button>
+  </nav>
+
+</div>
+<script src="app.js"></script>
+</body>
+</html>
