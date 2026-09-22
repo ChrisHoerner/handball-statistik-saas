@@ -7,10 +7,8 @@
  *  - alles andere: Weiterreichen an die statischen Assets (index.html, app.js, ...)
  *
  * NICHT enthalten (bewusst, siehe Chat-Notiz "kein stilles Loch"):
- *  - Auswertung (auswertungSpielerin/Spiel/Team, aktionenSpiel) -> liefert 501
- *  - CSV-Komplettexport -> eigener Schritt lt. Roadmap
- * Diese Endpunkte sind vorbereitet (Kommentar im Code), aber noch nicht
- * implementiert, damit dieser Schritt überschaubar bleibt.
+ *  - CSV-Komplettexport (Kunde exportiert alle eigenen Daten) -> eigener Schritt lt. Roadmap
+ * Auswertung (pro Spielerin/Team, halbzeitfein) und Aktionen-Abruf sind implementiert.
  *
  * Einmalig vor erstem Login nötig (siehe README-Abschnitt "D1 Setup"):
  *  1. Schema anwenden:  wrangler d1 execute handball-statistik-saas-db --remote --file=./d1-schema.sql
@@ -18,6 +16,32 @@
  */
 
 const SESSION_TTL_TAGE = 180;
+
+/* ---------- Statistik-Berechnung (identisch zur Logik aus apps-script.gs) ---------- */
+const WURF_ZONEN = ['9m', '6m', 'Außen', 'Kreis', 'Konter', '7m'];
+const BALLGEWINN = ['Techn. Fehler provoziert', 'Pass abgefangen', 'Rausprellen', 'Block'];
+const FEHLER = ['Fehlpass', 'Schritte', 'Stürmerfoul', 'Kreisfehler', 'Doppeltipp', 'Ballverlust'];
+const EINZEL = ['Assist', '7m geholt', '7m verursacht', '2min geholt', '2min verursacht'];
+
+function emptyStats() {
+  const s = {};
+  WURF_ZONEN.forEach(function (z) { s[z + '_Versuche'] = 0; s[z + '_Erfolg'] = 0; });
+  BALLGEWINN.forEach(function (k) { s[k] = 0; });
+  FEHLER.forEach(function (k) { s[k] = 0; });
+  EINZEL.forEach(function (k) { s[k] = 0; });
+  return s;
+}
+
+// Erfolg = Treffer bei Feldspielerinnen, Parade bei Torhüterinnen (isTW).
+function applyAktion(stats, aktionstyp, ergebnis, isTW) {
+  if (WURF_ZONEN.indexOf(aktionstyp) !== -1) {
+    const erfolgswert = isTW ? 'Parade' : 'Treffer';
+    stats[aktionstyp + '_Versuche']++;
+    if (ergebnis === erfolgswert) stats[aktionstyp + '_Erfolg']++;
+    return;
+  }
+  if (Object.prototype.hasOwnProperty.call(stats, aktionstyp)) stats[aktionstyp]++;
+}
 
 function json(obj, status) {
   return new Response(JSON.stringify(obj), {
@@ -157,7 +181,80 @@ async function handleSync(request, env, session) {
   return json({ status: 'ok', results: results });
 }
 
-/* ---------- Router ---------- */
+async function handleAktionenSpiel(env, session, spielId) {
+  const rows = await env.DB.prepare(
+    `SELECT id AS AktionID, spiel_id AS SpielID, spielerin_id AS SpielerinID, halbzeit AS Halbzeit,
+            aktionstyp AS Aktionstyp, ergebnis AS Ergebnis, quelle AS Quelle, zeitstempel AS Zeitstempel
+     FROM aktionen WHERE kunde_id = ? AND spiel_id = ?`
+  ).bind(session.kunde_id, spielId).all();
+  return json(rows.results || []);
+}
+
+/* Liefert die Aktionen für einen Zeitraum: entweder ein einzelnes Spiel
+   (zeitraum = SpielID) oder eine ganze Runde (zeitraum = 'runde', runde-Name
+   zusätzlich nötig -- fasst alle Spiele dieser Runde zusammen). */
+async function ladeAktionenFuerZeitraum(env, session, zeitraum, runde) {
+  if (zeitraum !== 'runde') {
+    const rows = await env.DB.prepare(
+      'SELECT spielerin_id, halbzeit, aktionstyp, ergebnis FROM aktionen WHERE kunde_id = ? AND spiel_id = ?'
+    ).bind(session.kunde_id, zeitraum).all();
+    return rows.results || [];
+  }
+  const spiele = await env.DB.prepare(
+    'SELECT id FROM spiele WHERE kunde_id = ? AND runde = ?'
+  ).bind(session.kunde_id, runde || '').all();
+  const spielIds = (spiele.results || []).map(function (s) { return s.id; });
+  if (!spielIds.length) return [];
+  const platzhalter = spielIds.map(function () { return '?'; }).join(',');
+  const rows = await env.DB.prepare(
+    `SELECT spielerin_id, halbzeit, aktionstyp, ergebnis FROM aktionen WHERE kunde_id = ? AND spiel_id IN (${platzhalter})`
+  ).bind(session.kunde_id, ...spielIds).all();
+  return rows.results || [];
+}
+
+async function handleAuswertung(request, env, session, url) {
+  const scope = url.searchParams.get('scope');
+  const zeitraum = url.searchParams.get('zeitraum');
+  const runde = url.searchParams.get('runde');
+  if (!zeitraum) return json({ error: 'zeitraum fehlt' }, 400);
+
+  const aktionen = await ladeAktionenFuerZeitraum(env, session, zeitraum, runde);
+
+  if (scope === 'team') {
+    const kader = await env.DB.prepare('SELECT id, position FROM kader WHERE kunde_id = ?').bind(session.kunde_id).all();
+    const posById = {};
+    (kader.results || []).forEach(function (k) { posById[k.id] = k.position; });
+
+    const buckets = { Feld: { '1': emptyStats(), '2': emptyStats(), Gesamt: emptyStats() }, TW: { '1': emptyStats(), '2': emptyStats(), Gesamt: emptyStats() } };
+    aktionen.forEach(function (a) {
+      const pos = posById[a.spielerin_id] === 'TW' ? 'TW' : 'Feld';
+      const hz = String(a.halbzeit) === '2' ? '2' : '1';
+      applyAktion(buckets[pos][hz], a.aktionstyp, a.ergebnis, pos === 'TW');
+      applyAktion(buckets[pos].Gesamt, a.aktionstyp, a.ergebnis, pos === 'TW');
+    });
+    return json({
+      Feld: { HZ1: buckets.Feld['1'], HZ2: buckets.Feld['2'], Gesamt: buckets.Feld.Gesamt },
+      TW: { HZ1: buckets.TW['1'], HZ2: buckets.TW['2'], Gesamt: buckets.TW.Gesamt }
+    });
+  }
+
+  if (scope === 'spielerin') {
+    const spielerinId = url.searchParams.get('spielerinId');
+    if (!spielerinId) return json({ error: 'spielerinId fehlt' }, 400);
+    const kaderRow = await env.DB.prepare('SELECT position FROM kader WHERE kunde_id = ? AND id = ?').bind(session.kunde_id, spielerinId).first();
+    const isTW = kaderRow && kaderRow.position === 'TW';
+
+    const buckets = { '1': emptyStats(), '2': emptyStats(), Gesamt: emptyStats() };
+    aktionen.filter(function (a) { return a.spielerin_id === spielerinId; }).forEach(function (a) {
+      const hz = String(a.halbzeit) === '2' ? '2' : '1';
+      applyAktion(buckets[hz], a.aktionstyp, a.ergebnis, isTW);
+      applyAktion(buckets.Gesamt, a.aktionstyp, a.ergebnis, isTW);
+    });
+    return json({ position: isTW ? 'TW' : 'Feld', HZ1: buckets['1'], HZ2: buckets['2'], Gesamt: buckets.Gesamt });
+  }
+
+  return json({ error: 'scope muss spielerin oder team sein' }, 400);
+}
 async function handleApi(request, env, url) {
   if (url.searchParams.get('action') === 'login' || (request.method === 'POST' && url.searchParams.get('action') === undefined && url.pathname.endsWith('/login'))) {
     // Login ist der einzige Endpunkt ohne Session.
@@ -182,9 +279,13 @@ async function handleApi(request, env, url) {
     return handleSync(request, env, session);
   }
 
-  // Auswertung/Export -> noch nicht implementiert (siehe Kopf-Kommentar), bewusst 501 statt stillem 404.
-  if (['auswertungSpielerin', 'auswertungSpiel', 'auswertungSpielTeam', 'aktionenSpiel'].indexOf(action) !== -1) {
-    return json({ error: 'Noch nicht auf D1 umgestellt (folgt in einem späteren Schritt).' }, 501);
+  if (request.method === 'GET' && action === 'aktionenSpiel') {
+    const spielId = url.searchParams.get('spielId');
+    if (!spielId) return json({ error: 'spielId fehlt' }, 400);
+    return handleAktionenSpiel(env, session, spielId);
+  }
+  if (request.method === 'GET' && action === 'auswertung') {
+    return handleAuswertung(request, env, session, url);
   }
 
   return json({ error: 'Unbekannte Aktion: ' + action }, 404);
