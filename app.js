@@ -359,12 +359,6 @@ function bindUI() {
   document.getElementById('btnExportAuswertung').addEventListener('click', exportAuswertungCSV);
   document.getElementById('btnExportAktionen').addEventListener('click', exportAktionenCSV);
 
-  document.getElementById('importFile').addEventListener('change', function (e) {
-    const file = e.target.files[0];
-    if (file) importAktionenCSV(file);
-    e.target.value = '';
-  });
-
   document.getElementById('syncBtn').addEventListener('click', function () { trySync(true); });
 
   document.querySelectorAll('#halbzeitToggle button').forEach(function (btn) {
@@ -1299,74 +1293,6 @@ async function exportAllCSV() {
   } finally {
     btn.disabled = false;
   }
-}
-
-function parseCSVLine(line) {
-  const result = [];
-  let cur = '';
-  let inQuotes = false;
-  for (let i = 0; i < line.length; i++) {
-    const c = line[i];
-    if (inQuotes) {
-      if (c === '"') {
-        if (line[i + 1] === '"') { cur += '"'; i++; }
-        else { inQuotes = false; }
-      } else {
-        cur += c;
-      }
-    } else {
-      if (c === '"') { inQuotes = true; }
-      else if (c === ';') { result.push(cur); cur = ''; }
-      else { cur += c; }
-    }
-  }
-  result.push(cur);
-  return result;
-}
-
-function parseCSV(text) {
-  if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1); // BOM entfernen
-  const lines = text.split(/\r\n|\n|\r/).filter(function (l) { return l.length > 0; });
-  return lines.map(parseCSVLine);
-}
-
-async function importAktionenCSV(file) {
-  const text = await file.text();
-  const rows = parseCSV(text);
-  if (!rows.length) { alert('Datei ist leer.'); return; }
-
-  const header = rows[0];
-  const idx = {};
-  header.forEach(function (h, i) { idx[h.trim()] = i; });
-  const required = ['AktionID', 'SpielID', 'SpielerinID', 'Halbzeit', 'Aktionstyp', 'Ergebnis'];
-  const missing = required.filter(function (r) { return idx[r] === undefined; });
-  if (missing.length) {
-    alert('Ungültiges Format – es fehlen Spalten: ' + missing.join(', ') + '. Bitte eine unveränderte Export-Datei dieser App verwenden.');
-    return;
-  }
-
-  let count = 0;
-  for (let i = 1; i < rows.length; i++) {
-    const r = rows[i];
-    if (!r[idx['AktionID']]) continue;
-    const event = {
-      AktionID: r[idx['AktionID']],
-      SpielID: r[idx['SpielID']],
-      SpielerinID: r[idx['SpielerinID']],
-      Halbzeit: r[idx['Halbzeit']],
-      Aktionstyp: r[idx['Aktionstyp']],
-      Ergebnis: r[idx['Ergebnis']],
-      Quelle: idx['Quelle'] !== undefined && r[idx['Quelle']] ? r[idx['Quelle']] : 'import',
-      Zeitstempel: idx['Zeitstempel'] !== undefined && r[idx['Zeitstempel']] ? r[idx['Zeitstempel']] : new Date().toISOString(),
-      synced: false
-    };
-    await idbPut('events', event);
-    count++;
-  }
-  updateStatusBar();
-  updateLiveScore();
-  alert(count + ' Aktionen aus der Datei übernommen. Werden jetzt synchronisiert.');
-  trySync();
 }
 
 /* ---------- Erfasser-Übersicht (nach Quelle/Nutzer) ---------- */
