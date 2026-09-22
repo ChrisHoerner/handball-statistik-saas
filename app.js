@@ -250,6 +250,7 @@ function bindUI() {
   });
 
   document.getElementById('btnLoadRoster').addEventListener('click', loadRosterFromBackend);
+  document.getElementById('btnExportAll').addEventListener('click', exportAllCSV);
 
   document.getElementById('btnKaderNeu').addEventListener('click', function () { openKaderForm(null); });
   document.getElementById('btnKaderAbbrechen').addEventListener('click', closeKaderForm);
@@ -1209,7 +1210,36 @@ async function exportAktionenCSV() {
   }
 }
 
-/* ---------- CSV-Import (Gegenstück zum Aktionen-Export) ---------- */
+/* ---------- Komplettexport (Datenhoheit -- Kunde kann jederzeit alles mitnehmen) ---------- */
+async function exportAllCSV() {
+  const btn = document.getElementById('btnExportAll');
+  btn.disabled = true;
+  try {
+    const res = await authFetch(API_BASE + '?action=exportAll');
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+
+    const datum = new Date().toISOString().slice(0, 10);
+    const praefix = datum + '_' + sanitizeFilenamePart(state.runde || 'export');
+
+    const tabellen = [
+      { name: 'kader', spalten: ['SpielerinID', 'Name', 'Rückennummer', 'Position'], rows: data.kader },
+      { name: 'kader_runde', spalten: ['SpielerinID', 'Runde', 'Status'], rows: data.kader_runde },
+      { name: 'spiele', spalten: ['SpielID', 'Datum', 'Gegner', 'Runde', 'Tore_eigene', 'Tore_gegner', 'Status'], rows: data.spiele },
+      { name: 'aktionen', spalten: ['AktionID', 'SpielID', 'SpielerinID', 'Halbzeit', 'Aktionstyp', 'Ergebnis', 'Quelle', 'Zeitstempel'], rows: data.aktionen }
+    ];
+
+    tabellen.forEach(function (t) {
+      const csvRows = [t.spalten];
+      (t.rows || []).forEach(function (r) { csvRows.push(t.spalten.map(function (s) { return r[s]; })); });
+      downloadCSV(praefix + '_' + t.name + '.csv', csvRows);
+    });
+  } catch (e) {
+    alert('Export fehlgeschlagen – kein Netz? (' + e.message + ')');
+  } finally {
+    btn.disabled = false;
+  }
+}
 
 function parseCSVLine(line) {
   const result = [];
