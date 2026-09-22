@@ -45,6 +45,23 @@
     <div id="logoutForm" style="display:none">
       <p class="hint" id="loggedInAs"></p>
       <button class="secondary-btn" id="btnLogout">Abmelden</button>
+
+      <h2 style="margin-top:1.2rem">Code ändern</h2>
+      <p class="hint">Gilt für die Rolle, mit der du gerade angemeldet bist -- alle, die diesen Code kennen, brauchen danach den neuen.</p>
+      <div class="field">
+        <label for="codeAlt">Aktueller Code</label>
+        <input type="password" id="codeAlt" autocomplete="off">
+      </div>
+      <div class="field">
+        <label for="codeNeu">Neuer Code</label>
+        <input type="password" id="codeNeu" autocomplete="off">
+      </div>
+      <div class="field">
+        <label for="codeNeuWiederholen">Neuer Code wiederholen</label>
+        <input type="password" id="codeNeuWiederholen" autocomplete="off">
+      </div>
+      <button class="secondary-btn" id="btnCodeAendern">Code speichern</button>
+      <p class="hint" id="codeAendernError"></p>
     </div>
 
     <h2 style="margin-top:1.2rem">Nach einem Update</h2>

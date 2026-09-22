@@ -270,6 +270,37 @@ function bindUI() {
 
   document.getElementById('btnLogout').addEventListener('click', doLogout);
 
+  document.getElementById('btnCodeAendern').addEventListener('click', async function () {
+    const alterCode = document.getElementById('codeAlt').value.trim();
+    const neuerCode = document.getElementById('codeNeu').value.trim();
+    const wiederholung = document.getElementById('codeNeuWiederholen').value.trim();
+    const errorEl = document.getElementById('codeAendernError');
+    const btn = document.getElementById('btnCodeAendern');
+
+    if (!alterCode || !neuerCode) { errorEl.textContent = 'Beide Felder ausfüllen.'; return; }
+    if (neuerCode !== wiederholung) { errorEl.textContent = 'Neue Codes stimmen nicht überein.'; return; }
+
+    btn.disabled = true;
+    errorEl.textContent = '';
+    try {
+      const res = await authFetch(API_BASE + '?action=changeCode', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ alterCode: alterCode, neuerCode: neuerCode })
+      });
+      const data = await res.json();
+      if (!res.ok || data.error) { errorEl.textContent = data.error || 'Ändern fehlgeschlagen.'; return; }
+      document.getElementById('codeAlt').value = '';
+      document.getElementById('codeNeu').value = '';
+      document.getElementById('codeNeuWiederholen').value = '';
+      alert('Code geändert. Beim nächsten Anmelden gilt der neue Code.');
+    } catch (e) {
+      errorEl.textContent = 'Kein Netz? (' + e.message + ')';
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
   document.getElementById('btnSaveSettings').addEventListener('click', async function () {
     state.runde = document.getElementById('rundeSelect').value.trim();
     await idbPut('settings', { key: 'runde', value: state.runde });
