@@ -4,5 +4,13 @@
   "assets": {
     "directory": "./",
     "not_found_handling": "single-page-application"
-  }
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "handball-statistik-saas-db",
+      "database_id": "d18a3b6e-cbc8-40ff-b776-0a0748745708"
+    }
+  ]
 }
+
