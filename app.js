@@ -977,7 +977,7 @@ async function populateAuswertungSelects() {
   spielerinSelect.innerHTML = '';
   state.roster.forEach(function (p) {
     const opt = document.createElement('option');
-    opt.value = p.Name;
+    opt.value = p.SpielerinID;
     opt.textContent = p.Name;
     spielerinSelect.appendChild(opt);
   });
@@ -1015,19 +1015,16 @@ function selectedSpielInfo() {
 async function showAuswertung() {
   const el = document.getElementById('ausErgebnis');
   const zeitraum = document.getElementById('ausZeitraum').value;
-  const name = document.getElementById('ausSpielerin').value;
+  const spielerinId = document.getElementById('ausSpielerin').value;
   const teamGesamt = document.getElementById('ausTeamGesamt').checked;
   const spielInfo = selectedSpielInfo();
   el.innerHTML = '<p class="aus-empty">Lade …</p>';
 
+  const rundeParam = zeitraum === 'runde' ? '&runde=' + encodeURIComponent(state.runde) : '';
+
   if (teamGesamt) {
-    if (zeitraum === 'runde') {
-      el.innerHTML = '<p class="aus-empty">Team gesamt geht nur bei einem einzelnen Spiel – bitte oben ein Spiel statt „Ganze Runde" wählen.</p>';
-      lastAuswertungExport = null;
-      return;
-    }
     try {
-      const res = await authFetch(API_BASE + '?action=auswertungSpielTeam&spielId=' + encodeURIComponent(zeitraum));
+      const res = await authFetch(API_BASE + '?action=auswertung&scope=team&zeitraum=' + encodeURIComponent(zeitraum) + rundeParam);
       const data = await res.json();
       if (data.error) throw new Error(data.error);
       lastAuswertungExport = { type: 'team', data: data, spielInfo: spielInfo };
@@ -1040,45 +1037,41 @@ async function showAuswertung() {
   }
 
   try {
-    let row = null;
-    if (zeitraum === 'runde') {
-      const res = await authFetch(API_BASE + '?action=auswertungSpielerin');
-      const rows = await res.json();
-      row = rows.find(function (r) { return r.Name === name && r.Runde === state.runde; });
-    } else {
-      const res = await authFetch(API_BASE + '?action=auswertungSpiel');
-      const rows = await res.json();
-      row = rows.find(function (r) { return r.Name === name && r.SpielID === zeitraum; });
-    }
-    lastAuswertungExport = { type: 'spielerin', row: row, zeitraum: zeitraum, spielInfo: spielInfo };
-    renderAuswertung(el, row);
+    const res = await authFetch(API_BASE + '?action=auswertung&scope=spielerin&spielerinId=' + encodeURIComponent(spielerinId) + '&zeitraum=' + encodeURIComponent(zeitraum) + rundeParam);
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    lastAuswertungExport = { type: 'spielerin', data: data, zeitraum: zeitraum, spielInfo: spielInfo };
+    renderAuswertung(el, data);
   } catch (e) {
     el.innerHTML = '<p class="aus-empty">Fehler beim Laden – kein Netz? (' + e.message + ')</p>';
     lastAuswertungExport = null;
   }
 }
 
-function statsBlockHtml(row, isTW) {
-  const versucheLabel = isTW ? 'Würfe aufs Tor' : 'Versuche';
+/* Eine Zonen-Kachel wie in der Erfassung, aber statt zweier Tipp-Buttons
+   eine kleine Tabelle mit HZ1/HZ2/Gesamt + Quote. */
+function auswertungZoneTileHtml(zone, hz1, hz2, gesamt, isTW) {
   const erfolgLabel = isTW ? 'Paraden' : 'Treffer';
-  const quoteLabel = isTW ? 'Paradenquote' : 'Quote';
-  const sectionTitle = isTW ? 'Paraden' : 'Wurf';
-  let html = '<div class="aus-section-title">' + sectionTitle + '</div><table class="aus-table"><tr><th>Zone</th><th>' + versucheLabel + '</th><th>' + erfolgLabel + '</th><th>' + quoteLabel + '</th></tr>';
-  WURF_ZONEN.forEach(function (z) {
-    const quoteRaw = row[z + ' Quote'];
-    const quoteDisplay = (quoteRaw === '' || quoteRaw === undefined || quoteRaw === null)
-      ? ''
-      : (Math.round(quoteRaw * 1000) / 10) + '%';
-    html += '<tr><td>' + z + '</td><td>' + (row[z + ' Versuche'] || 0) + '</td><td>' + (row[z + ' Erfolg'] || 0) + '</td><td>' + quoteDisplay + '</td></tr>';
-  });
-  html += '</table>';
-  if (isTW) {
-    html += simpleTableHtml('Einzelereignisse', ['Assist', 'Fehlpass'], row);
-  } else {
-    html += simpleTableHtml('Ballgewinn', BALLGEWINN, row);
-    html += simpleTableHtml('Eigener Fehler', FEHLER, row);
-    html += simpleTableHtml('Einzelereignisse', EINZEL, row);
+  const missLabel = isTW ? 'Gegentore' : 'Fehlwurf';
+  function zeile(label, stats) {
+    const v = stats[zone + '_Versuche'] || 0;
+    const e = stats[zone + '_Erfolg'] || 0;
+    const quote = v ? (Math.round((e / v) * 1000) / 10) + '%' : '–';
+    return '<tr><td>' + label + '</td><td>' + e + '</td><td>' + (v - e) + '</td><td>' + quote + '</td></tr>';
   }
+  return '<div class="zone-tile ausz-tile"><div class="zone-label">' + zone + '</div>' +
+    '<table class="ausz-table"><tr><th></th><th>' + erfolgLabel + '</th><th>' + missLabel + '</th><th>Quote</th></tr>' +
+    zeile('HZ1', hz1) + zeile('HZ2', hz2) + zeile('Gesamt', gesamt) +
+    '</table></div>';
+}
+
+function auswertungCourtHtml(hz1, hz2, gesamt, isTW) {
+  let html = '';
+  COURT_ROWS.forEach(function (pair) {
+    html += '<div class="court-row court-row-2">';
+    pair.forEach(function (zone) { html += auswertungZoneTileHtml(zone, hz1, hz2, gesamt, isTW); });
+    html += '</div>';
+  });
   return html;
 }
 
@@ -1089,20 +1082,22 @@ function simpleTableHtml(title, items, row) {
   return t;
 }
 
-function renderAuswertung(el, row) {
-  if (!row) {
-    el.innerHTML = '<p class="aus-empty">Keine Daten für diese Auswahl.</p>';
-    return;
-  }
-  el.innerHTML = statsBlockHtml(row, row.Position === 'TW');
+function renderAuswertung(el, data) {
+  const isTW = data.position === 'TW';
+  let html = auswertungCourtHtml(data.HZ1, data.HZ2, data.Gesamt, isTW);
+  html += isTW
+    ? simpleTableHtml('Einzelereignisse', ['Assist', 'Fehlpass'], data.Gesamt)
+    : simpleTableHtml('Ballgewinn', BALLGEWINN, data.Gesamt) + simpleTableHtml('Eigener Fehler', FEHLER, data.Gesamt) + simpleTableHtml('Einzelereignisse', EINZEL, data.Gesamt);
+  el.innerHTML = html;
 }
 
 function renderTeamAuswertung(el, data) {
   function block(titel, teil, isTW) {
-    return '<h2 style="margin-top:1.2rem">' + titel + '</h2>' +
-      '<div class="aus-section-title">1. Halbzeit</div>' + statsBlockHtml(teil.HZ1, isTW) +
-      '<div class="aus-section-title">2. Halbzeit</div>' + statsBlockHtml(teil.HZ2, isTW) +
-      '<div class="aus-section-title">Gesamtes Spiel</div>' + statsBlockHtml(teil.Gesamt, isTW);
+    let html = '<h2 style="margin-top:1.2rem">' + titel + '</h2>' + auswertungCourtHtml(teil.HZ1, teil.HZ2, teil.Gesamt, isTW);
+    html += isTW
+      ? simpleTableHtml('Einzelereignisse', ['Assist', 'Fehlpass'], teil.Gesamt)
+      : simpleTableHtml('Ballgewinn', BALLGEWINN, teil.Gesamt) + simpleTableHtml('Eigener Fehler', FEHLER, teil.Gesamt) + simpleTableHtml('Einzelereignisse', EINZEL, teil.Gesamt);
+    return html;
   }
   el.innerHTML = block('Angriff (Feldspielerinnen)', data.Feld, false) + block('Abwehr / Torwart', data.TW, true);
 }
@@ -1131,27 +1126,31 @@ function downloadCSV(filename, rows) {
   setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
 }
 
-function statsRowsForCSV(row, isTW) {
+function statsRowsForCSV(hz1, hz2, gesamt, isTW) {
   const out = [];
-  out.push(['Zone', isTW ? 'Würfe aufs Tor' : 'Versuche', isTW ? 'Paraden' : 'Treffer', isTW ? 'Paradenquote' : 'Quote']);
+  out.push(['Zone', 'Halbzeit', isTW ? 'Paraden' : 'Treffer', isTW ? 'Gegentore' : 'Fehlwurf', 'Quote']);
   WURF_ZONEN.forEach(function (z) {
-    const qr = row[z + ' Quote'];
-    const q = (qr === '' || qr === undefined || qr === null) ? '' : (Math.round(qr * 1000) / 10) + '%';
-    out.push([z, row[z + ' Versuche'] || 0, row[z + ' Erfolg'] || 0, q]);
+    [['HZ1', hz1], ['HZ2', hz2], ['Gesamt', gesamt]].forEach(function (pair) {
+      const label = pair[0], stats = pair[1];
+      const v = stats[z + '_Versuche'] || 0;
+      const e = stats[z + '_Erfolg'] || 0;
+      const q = v ? (Math.round((e / v) * 1000) / 10) + '%' : '';
+      out.push([z, label, e, v - e, q]);
+    });
   });
   out.push([]);
   if (isTW) {
-    out.push(['Einzelereignisse']);
-    ['Assist', 'Fehlpass'].forEach(function (k) { out.push([k, row[k] || 0]); });
+    out.push(['Einzelereignisse (gesamtes Spiel/Runde)']);
+    ['Assist', 'Fehlpass'].forEach(function (k) { out.push([k, gesamt[k] || 0]); });
   } else {
-    out.push(['Ballgewinn']);
-    BALLGEWINN.forEach(function (k) { out.push([k, row[k] || 0]); });
+    out.push(['Ballgewinn (gesamtes Spiel/Runde)']);
+    BALLGEWINN.forEach(function (k) { out.push([k, gesamt[k] || 0]); });
     out.push([]);
-    out.push(['Eigener Fehler']);
-    FEHLER.forEach(function (k) { out.push([k, row[k] || 0]); });
+    out.push(['Eigener Fehler (gesamtes Spiel/Runde)']);
+    FEHLER.forEach(function (k) { out.push([k, gesamt[k] || 0]); });
     out.push([]);
-    out.push(['Einzelereignisse']);
-    EINZEL.forEach(function (k) { out.push([k, row[k] || 0]); });
+    out.push(['Einzelereignisse (gesamtes Spiel/Runde)']);
+    EINZEL.forEach(function (k) { out.push([k, gesamt[k] || 0]); });
   }
   return out;
 }
@@ -1170,23 +1169,21 @@ function exportAuswertungCSV() {
     : sanitizeFilenamePart(state.runde);
 
   if (lastAuswertungExport.type === 'spielerin') {
-    const row = lastAuswertungExport.row;
-    if (!row) { alert('Keine Daten zum Exportieren.'); return; }
-    rows.push([row.Name + (row.Position === 'TW' ? ' (TW)' : '')]);
+    const data = lastAuswertungExport.data;
+    if (!data) { alert('Keine Daten zum Exportieren.'); return; }
+    const name = document.getElementById('ausSpielerin').selectedOptions[0].textContent;
+    const isTW = data.position === 'TW';
+    rows.push([name + (isTW ? ' (TW)' : '')]);
     rows.push([]);
-    rows = rows.concat(statsRowsForCSV(row, row.Position === 'TW'));
-    filename = praefix + '_' + sanitizeFilenamePart(row.Name) + '_Auswertung.csv';
+    rows = rows.concat(statsRowsForCSV(data.HZ1, data.HZ2, data.Gesamt, isTW));
+    filename = praefix + '_' + sanitizeFilenamePart(name) + '_Auswertung.csv';
   } else if (lastAuswertungExport.type === 'team') {
     const data = lastAuswertungExport.data;
     ['Feld', 'TW'].forEach(function (gruppe) {
       const isTW = gruppe === 'TW';
       rows.push([isTW ? 'Abwehr / Torwart' : 'Angriff (Feldspielerinnen)']);
-      ['HZ1', 'HZ2', 'Gesamt'].forEach(function (teil) {
-        const label = teil === 'HZ1' ? '1. Halbzeit' : teil === 'HZ2' ? '2. Halbzeit' : 'Gesamtes Spiel';
-        rows.push([label]);
-        rows = rows.concat(statsRowsForCSV(data[gruppe][teil], isTW));
-        rows.push([]);
-      });
+      rows = rows.concat(statsRowsForCSV(data[gruppe].HZ1, data[gruppe].HZ2, data[gruppe].Gesamt, isTW));
+      rows.push([]);
     });
     filename = praefix + '_Team_Auswertung.csv';
   }

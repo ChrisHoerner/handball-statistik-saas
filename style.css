@@ -205,6 +205,13 @@ input[type="text"], input[type="date"], input[type="url"], select {
 .zone-buttons .btn-treffer { background: var(--hit); color: #0e1712; }
 .zone-buttons .btn-treffer:active { filter: brightness(1.15); }
 
+.ausz-tile { padding-bottom: 0.3rem; }
+.ausz-table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
+.ausz-table th, .ausz-table td { text-align: center; padding: 0.3rem 0.2rem; }
+.ausz-table th { color: var(--text-dim); font-weight: 600; border-bottom: 1px solid var(--line); }
+.ausz-table td:first-child, .ausz-table th:first-child { text-align: left; padding-left: 0.5rem; color: var(--text-dim); }
+.ausz-table tr:last-child td { font-weight: 700; }
+
 .btn-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(6.5rem, 1fr));
