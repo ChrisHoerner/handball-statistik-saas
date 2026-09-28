@@ -129,6 +129,18 @@ input[type="text"], input[type="date"], input[type="url"], select {
 }
 #halbzeitToggle button.active { background: var(--accent); color: #14171c; border-color: var(--accent); }
 
+#phaseToggle { display: flex; gap: 0.5rem; margin-top: 0.5rem; }
+#phaseToggle button {
+  flex: 1;
+  padding: 0.6rem;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  color: var(--text-dim);
+  font-weight: 600;
+}
+#phaseToggle button.active { background: var(--accent); color: #14171c; border-color: var(--accent); }
+
 .player-group-label {
   font-size: 0.75rem;
   color: var(--text-dim);

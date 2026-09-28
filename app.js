@@ -3,6 +3,10 @@ const WURF_ZONEN = ['9m', '6m', 'Außen', 'Kreis', 'Konter', '7m'];
 const BALLGEWINN = ['Techn. Fehler provoziert', 'Pass abgefangen', 'Rausprellen', 'Block'];
 const FEHLER = ['Fehlpass', 'Schritte', 'Stürmerfoul', 'Kreisfehler', 'Doppeltipp', 'Ballverlust'];
 const EINZEL = ['Assist', '7m geholt', '7m verursacht', '2min geholt', '2min verursacht'];
+/* Nur für die Live-Erfassung: Teilmengen je Spielphase. Auswertung/CSV/Server
+   nutzen weiterhin die vollständige EINZEL-Liste oben, unverändert. */
+const EINZEL_ANGRIFF = ['Assist', '7m geholt', '2min geholt'];
+const EINZEL_ABWEHR = ['7m verursacht', '2min verursacht'];
 
 /* ---------- Kleine ID-Hilfe ---------- */
 function uid() {
@@ -117,6 +121,7 @@ const state = {
   roster: [],
   currentGameId: null,
   currentHalbzeit: '1',
+  currentPhase: 'angriff',
   selectedPlayerId: null,
   runde: '',
   activeRosterNames: null,
@@ -366,6 +371,17 @@ function bindUI() {
       document.querySelectorAll('#halbzeitToggle button').forEach(function (b) { b.classList.remove('active'); });
       btn.classList.add('active');
       state.currentHalbzeit = btn.dataset.hz;
+    });
+  });
+
+  document.querySelectorAll('#phaseToggle button').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      document.querySelectorAll('#phaseToggle button').forEach(function (b) { b.classList.remove('active'); });
+      btn.classList.add('active');
+      state.currentPhase = btn.dataset.phase;
+      renderGrid('einzelGrid', state.currentPhase === 'abwehr' ? EINZEL_ABWEHR : EINZEL_ANGRIFF);
+      const selected = state.roster.find(function (r) { return r.SpielerinID === state.selectedPlayerId; });
+      toggleTwView(selected ? selected.Position === 'TW' : false);
     });
   });
 }
@@ -759,7 +775,7 @@ async function renderLiveScreen() {
   renderWurfRows();
   renderGrid('ballgewinnGrid', BALLGEWINN);
   renderGrid('fehlerGrid', FEHLER);
-  renderGrid('einzelGrid', EINZEL);
+  renderGrid('einzelGrid', state.currentPhase === 'abwehr' ? EINZEL_ABWEHR : EINZEL_ANGRIFF);
   renderEventList();
   updateLiveScore();
   renderEndGameSection();
@@ -807,10 +823,12 @@ function renderPlayerStrip() {
 }
 
 function toggleTwView(isTw) {
-  document.getElementById('wurfGroup').style.display = isTw ? 'none' : '';
+  const isAngriff = state.currentPhase !== 'abwehr';
+  document.getElementById('phaseToggle').style.display = isTw ? 'none' : '';
+  document.getElementById('wurfGroup').style.display = (!isTw && isAngriff) ? '' : 'none';
   document.getElementById('twGroup').style.display = isTw ? '' : 'none';
-  document.getElementById('ballgewinnGrid').closest('.action-group').style.display = isTw ? 'none' : '';
-  document.getElementById('fehlerGrid').closest('.action-group').style.display = isTw ? 'none' : '';
+  document.getElementById('ballgewinnGroup').style.display = (!isTw && !isAngriff) ? '' : 'none';
+  document.getElementById('fehlerGroup').style.display = (!isTw && isAngriff) ? '' : 'none';
   document.getElementById('einzelGrid').closest('.action-group').style.display = isTw ? 'none' : '';
   if (isTw) renderTwRows();
 }
