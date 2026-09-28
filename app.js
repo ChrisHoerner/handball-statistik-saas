@@ -824,7 +824,6 @@ function renderPlayerStrip() {
 
 function toggleTwView(isTw) {
   const isAngriff = state.currentPhase !== 'abwehr';
-  document.getElementById('phaseToggle').style.display = isTw ? 'none' : '';
   document.getElementById('wurfGroup').style.display = (!isTw && isAngriff) ? '' : 'none';
   document.getElementById('twGroup').style.display = isTw ? '' : 'none';
   document.getElementById('ballgewinnGroup').style.display = (!isTw && !isAngriff) ? '' : 'none';
