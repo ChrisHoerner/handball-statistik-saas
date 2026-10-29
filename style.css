@@ -176,7 +176,7 @@ input[type="text"], input[type="date"], input[type="url"], select {
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 2rem;
-  color: var(--text-dim);
+  color: #fff;
   font-weight: 400;
   white-space: nowrap;
 }
