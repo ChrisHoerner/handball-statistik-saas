@@ -224,8 +224,8 @@ input[type="text"], input[type="date"], input[type="url"], select {
   font-weight: 700;
   border-radius: 0;
 }
-.zone-buttons .btn-fehlwurf { background: var(--panel-raised); color: var(--text-dim); }
-.zone-buttons .btn-fehlwurf:active { background: var(--miss); color: #fff; }
+.zone-buttons .btn-fehlwurf { background: var(--miss); color: #fff; }
+.zone-buttons .btn-fehlwurf:active { filter: brightness(1.15); }
 .zone-buttons .btn-treffer { background: var(--hit); color: #0e1712; }
 .zone-buttons .btn-treffer:active { filter: brightness(1.15); }
 
