@@ -15,7 +15,7 @@
  *  2. Ersten Kunden + Zugangscodes anlegen (siehe seed.sql)
  */
 
-import { analysiereBericht, kontrolliereBericht, normName, SEGMENT_NAMEN } from './bericht.js';
+import { analysiereBericht, kontrolliereBericht, berechneAbgleich, kaderMatcher, normName, SEGMENT_NAMEN } from './bericht.js';
 
 const SESSION_TTL_TAGE = 180;
 
@@ -522,6 +522,103 @@ function normNameServer(s) {
   return String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ').trim();
 }
 
+/* ---------- Tore-Abgleich Spielbericht <-> Erfassung (nur Admin) ---------- */
+async function handleAbgleich(env, session, url) {
+  if (session.rolle !== 'admin') return json({ error: 'Nur Admin darf Tore abgleichen.' }, 403);
+  await stelleSpielberichtSchemaSicher(env);
+  const spielId = url.searchParams.get('spielId');
+  if (!spielId) return json({ error: 'spielId fehlt' }, 400);
+  const row = await env.DB.prepare('SELECT daten FROM spielbericht WHERE spiel_id = ? AND mannschaft_id = ?')
+    .bind(spielId, session.mannschaft_id).first();
+  if (!row) return json({ error: 'Für dieses Spiel liegt kein Spielbericht vor.' }, 404);
+  const bericht = JSON.parse(row.daten);
+  const own = bericht.own;
+
+  const kader = (await env.DB.prepare('SELECT id, name, rueckennummer FROM kader WHERE mannschaft_id = ?')
+    .bind(session.mannschaft_id).all()).results || [];
+  const finde = kaderMatcher(kader);
+  const nameById = {};
+  kader.forEach(function (k) { nameById[k.id] = k.name; });
+
+  // Tore aus dem Bericht mit Zwischenstand (eigene : gegnerische)
+  const events = (bericht.events || []).slice().sort(function (a, b) { return a.t - b.t; });
+  let tEigen = 0, tGegner = 0;
+  const acta = [];
+  events.forEach(function (e) {
+    if (e.typ !== 'tor' && e.typ !== 'tor7') return;
+    if (e.team === own) {
+      tEigen++;
+      const k = finde(e.nr, e.name);
+      acta.push({ t: e.t, typ: e.typ, kaderId: k ? k.id : null, nr: e.nr, name: e.name, stand: tEigen + ':' + tGegner });
+    } else { tGegner++; }
+  });
+
+  const zonenSql = WURF_ZONEN.map(function () { return '?'; }).join(',');
+  const rows = (await env.DB.prepare(
+    `SELECT id, spielerin_id, aktionstyp, zeitstempel FROM aktionen
+     WHERE mannschaft_id = ? AND spiel_id = ? AND ergebnis = 'Treffer' AND aktionstyp IN (${zonenSql})`
+  ).bind(session.mannschaft_id, spielId, ...WURF_ZONEN).all()).results || [];
+  const erfasst = rows.map(function (r) {
+    return { id: r.id, spielerinId: r.spielerin_id, name: nameById[r.spielerin_id] || r.spielerin_id, zone: r.aktionstyp, ts: Date.parse(r.zeitstempel) || 0 };
+  }).sort(function (a, b) { return a.ts - b.ts || (a.id < b.id ? -1 : 1); });
+
+  const ergebnis = berechneAbgleich(acta, erfasst);
+  return json({ bericht: ergebnis.bericht, erfasst: ergebnis.erfasst, karten: ergebnis.karten, zonen: WURF_ZONEN });
+}
+
+async function handleAbgleichAnwenden(request, env, session) {
+  if (session.rolle !== 'admin') return json({ error: 'Nur Admin darf Tore abgleichen.' }, 403);
+  const body = await request.json();
+  const spielId = body.spielId;
+  const op = body.op || {};
+  if (!spielId || !op.op) return json({ error: 'spielId und op sind nötig.' }, 400);
+  const quelle = 'Spielbericht-Abgleich';
+
+  async function holeTreffer(aktionId) {
+    const a = await env.DB.prepare('SELECT id, aktionstyp, ergebnis FROM aktionen WHERE id = ? AND mannschaft_id = ? AND spiel_id = ?')
+      .bind(aktionId, session.mannschaft_id, spielId).first();
+    if (!a || WURF_ZONEN.indexOf(a.aktionstyp) === -1 || a.ergebnis !== 'Treffer') return null;
+    return a;
+  }
+  async function pruefeSpielerin(id) {
+    const k = await env.DB.prepare('SELECT id FROM kader WHERE id = ? AND mannschaft_id = ?').bind(id, session.mannschaft_id).first();
+    return !!k;
+  }
+
+  if (op.op === 'add') {
+    if (WURF_ZONEN.indexOf(op.zone) === -1) return json({ error: 'Zone ist Pflicht.' }, 400);
+    if (!(await pruefeSpielerin(op.spielerinId))) return json({ error: 'Spielerin nicht gefunden.' }, 404);
+    const ts = Number(op.ts) > 0 ? new Date(Number(op.ts)).toISOString() : new Date().toISOString();
+    await env.DB.prepare(
+      `INSERT INTO aktionen (id, mannschaft_id, spiel_id, spielerin_id, halbzeit, aktionstyp, ergebnis, quelle, zeitstempel)
+       VALUES (?, ?, ?, ?, ?, ?, 'Treffer', ?, ?)`
+    ).bind(crypto.randomUUID(), session.mannschaft_id, spielId, op.spielerinId, op.halbzeit === '2' ? '2' : '1', op.zone, quelle, ts).run();
+    return json({ status: 'ok' });
+  }
+
+  const a = await holeTreffer(op.aktionId);
+  if (!a) return json({ error: 'Erfasster Treffer nicht gefunden (evtl. schon geändert).' }, 404);
+
+  if (op.op === 'delete') {
+    await env.DB.prepare('DELETE FROM aktionen WHERE id = ? AND mannschaft_id = ?').bind(a.id, session.mannschaft_id).run();
+  } else if (op.op === 'tofehl') {
+    await env.DB.prepare("UPDATE aktionen SET ergebnis = 'Fehlwurf', quelle = ? WHERE id = ? AND mannschaft_id = ?")
+      .bind(quelle, a.id, session.mannschaft_id).run();
+  } else if (op.op === 'reassign') {
+    if (!(await pruefeSpielerin(op.spielerinId))) return json({ error: 'Spielerin nicht gefunden.' }, 404);
+    const zone = op.zone && WURF_ZONEN.indexOf(op.zone) !== -1 ? op.zone : a.aktionstyp;
+    await env.DB.prepare('UPDATE aktionen SET spielerin_id = ?, aktionstyp = ?, quelle = ? WHERE id = ? AND mannschaft_id = ?')
+      .bind(op.spielerinId, zone, quelle, a.id, session.mannschaft_id).run();
+  } else if (op.op === 'setzone') {
+    if (WURF_ZONEN.indexOf(op.zone) === -1) return json({ error: 'Zone ist Pflicht.' }, 400);
+    await env.DB.prepare('UPDATE aktionen SET aktionstyp = ?, quelle = ? WHERE id = ? AND mannschaft_id = ?')
+      .bind(op.zone, quelle, a.id, session.mannschaft_id).run();
+  } else {
+    return json({ error: 'Unbekannte Operation: ' + op.op }, 400);
+  }
+  return json({ status: 'ok' });
+}
+
 /* ---------- Eigenen Code ändern (kein Eingriff durch den Anbieter nötig) ---------- */
 async function handleChangeCode(request, env, session) {
   const body = await request.json();
@@ -585,6 +682,12 @@ async function handleApi(request, env, url) {
   }
   if (request.method === 'POST' && action === 'spielbericht') {
     return handleSpielberichtSpeichern(request, env, session);
+  }
+  if (request.method === 'GET' && action === 'abgleich') {
+    return handleAbgleich(env, session, url);
+  }
+  if (request.method === 'POST' && action === 'abgleichAnwenden') {
+    return handleAbgleichAnwenden(request, env, session);
   }
   if (request.method === 'GET' && action === 'berichtAuswertung') {
     return handleBerichtAuswertung(env, session, url);

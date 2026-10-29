@@ -367,6 +367,7 @@ function bindUI() {
   document.getElementById('btnExportAktionen').addEventListener('click', exportAktionenCSV);
   document.getElementById('btnBerichtAuswertung').addEventListener('click', showBerichtAuswertung);
   document.getElementById('berichtFile').addEventListener('change', onBerichtFile);
+  document.getElementById('btnAbgleich').addEventListener('click', ladeAbgleich);
 
   document.getElementById('syncBtn').addEventListener('click', function () { trySync(true); });
 
@@ -1544,6 +1545,150 @@ function renderBerichtAuswertung(el, data) {
     html += '</table>';
   }
   el.innerHTML = html;
+}
+
+/* ---------- Tore abgleichen (Spielbericht <-> Erfassung) ---------- */
+
+function abEl(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text != null) e.textContent = text;
+  return e;
+}
+
+function abZeitStempel(ts) {
+  return new Date(ts).toLocaleTimeString('de-DE');
+}
+
+function abBerichtZeile(b) {
+  const art = b.typ === 'tor7' ? '7m-Tor' : 'Tor';
+  return '#' + b.nr + ' ' + b.name + ' · ' + art + ' · ' + fmtMinSek(b.t) + ' (' + (b.t < 1800 ? '1.' : '2.') + ' HZ)' + (b.stand ? ' · Stand ' + b.stand : '');
+}
+
+async function ladeAbgleich() {
+  const el = document.getElementById('abgleichErgebnis');
+  const zeitraum = document.getElementById('ausZeitraum').value;
+  if (zeitraum === 'runde') { el.innerHTML = '<p class="aus-empty">Bitte oben ein einzelnes Spiel auswählen.</p>'; return; }
+  el.innerHTML = '<p class="aus-empty">Lade …</p>';
+  try {
+    const res = await authFetch(API_BASE + '?action=abgleich&spielId=' + encodeURIComponent(zeitraum));
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    renderAbgleich(el, data, zeitraum);
+  } catch (e) {
+    el.innerHTML = '<p class="aus-empty">Fehler: ' + escHtml(e.message) + '</p>';
+  }
+}
+
+async function wendeAbgleichAn(spielId, op, statusEl) {
+  statusEl.textContent = 'Speichere …';
+  try {
+    const res = await authFetch(API_BASE + '?action=abgleichAnwenden', {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain' },
+      body: JSON.stringify({ spielId: spielId, op: op })
+    });
+    const data = await res.json();
+    if (data.status !== 'ok') throw new Error(data.error || 'Backend meldet Fehler (HTTP ' + res.status + ')');
+    await ladeAbgleich();
+    showBerichtAuswertung();
+  } catch (e) {
+    statusEl.textContent = 'Fehlgeschlagen: ' + e.message;
+  }
+}
+
+function abZoneSelect(zonen, ausser7m) {
+  const sel = document.createElement('select');
+  const leer = document.createElement('option');
+  leer.value = ''; leer.textContent = 'Zone wählen …';
+  sel.appendChild(leer);
+  zonen.forEach(function (z) {
+    if (ausser7m && z === '7m') return;
+    const o = document.createElement('option');
+    o.value = z; o.textContent = z;
+    sel.appendChild(o);
+  });
+  return sel;
+}
+
+function renderAbgleich(el, data, spielId) {
+  el.innerHTML = '';
+  el.appendChild(abEl('div', 'aus-section-title', 'Tore abgleichen'));
+  const kopf = abEl('div', 'ab-head');
+  kopf.innerHTML = 'Spielbericht: <b>' + data.bericht + '</b> Tore · erfasst: <b>' + data.erfasst + '</b> Treffer<br>' +
+    (data.karten.length ? data.karten.length + ' Abweichung' + (data.karten.length === 1 ? '' : 'en') + ' gefunden' : 'Keine Abweichungen – Erfassung und Bericht passen zusammen.');
+  el.appendChild(kopf);
+
+  data.karten.forEach(function (k) {
+    const card = abEl('div', 'ab-card');
+    const status = abEl('p', 'hint');
+    const row = abEl('div', 'ab-row');
+
+    if (k.art === 'fehlt') {
+      card.appendChild(abEl('span', 'tag tag-fehlt', 'Fehlt in der Erfassung'));
+      card.appendChild(abEl('p', '', abBerichtZeile(k.bericht)));
+      if (!k.bericht.kaderId) {
+        card.appendChild(abEl('p', 'dim', 'Spielerin im Kader nicht gefunden – bitte zuerst im Tab Kader anlegen.'));
+      } else {
+        const sel = abZoneSelect(data.zonen, false);
+        if (k.zoneFix) { sel.value = k.zoneFix; sel.disabled = true; }
+        const btn = abEl('button', '', 'Ergänzen');
+        btn.addEventListener('click', function () {
+          if (!sel.value) { status.textContent = 'Zone ist Pflicht.'; return; }
+          wendeAbgleichAn(spielId, { op: 'add', spielerinId: k.bericht.kaderId, zone: sel.value, halbzeit: k.halbzeit, ts: k.ts }, status);
+        });
+        row.appendChild(sel); row.appendChild(btn); card.appendChild(row);
+      }
+    } else if (k.art === 'falsch') {
+      card.appendChild(abEl('span', 'tag tag-falsch', 'Wahrscheinlich falsche Spielerin'));
+      card.appendChild(abEl('p', '', 'Erfasst: ' + k.erfasst.name + ' · Treffer · ' + k.erfasst.zone));
+      card.appendChild(abEl('p', 'dim', 'um ' + abZeitStempel(k.erfasst.ts) + ' Uhr'));
+      card.appendChild(abEl('p', '', 'Bericht: ' + abBerichtZeile(k.bericht)));
+      const btn = abEl('button', '', k.bericht.name + ' zuordnen');
+      btn.addEventListener('click', function () {
+        wendeAbgleichAn(spielId, { op: 'reassign', aktionId: k.erfasst.id, spielerinId: k.bericht.kaderId }, status);
+      });
+      const skip = abEl('button', 'sec', 'Ignorieren');
+      skip.addEventListener('click', function () { card.remove(); });
+      row.appendChild(btn); row.appendChild(skip); card.appendChild(row);
+    } else if (k.art === 'zone') {
+      card.appendChild(abEl('span', 'tag tag-falsch', 'Zone passt nicht zum Bericht'));
+      card.appendChild(abEl('p', '', 'Erfasst: ' + k.erfasst.name + ' · Treffer · ' + k.erfasst.zone));
+      card.appendChild(abEl('p', 'dim', 'um ' + abZeitStempel(k.erfasst.ts) + ' Uhr'));
+      card.appendChild(abEl('p', '', 'Bericht: ' + abBerichtZeile(k.bericht)));
+      if (k.zoneVorschlag) {
+        const btn = abEl('button', '', 'Zone auf ' + k.zoneVorschlag + ' ändern');
+        btn.addEventListener('click', function () { wendeAbgleichAn(spielId, { op: 'setzone', aktionId: k.erfasst.id, zone: k.zoneVorschlag }, status); });
+        row.appendChild(btn);
+      } else {
+        const sel = abZoneSelect(data.zonen, true);
+        const btn = abEl('button', '', 'Zone ändern');
+        btn.addEventListener('click', function () {
+          if (!sel.value) { status.textContent = 'Zone ist Pflicht.'; return; }
+          wendeAbgleichAn(spielId, { op: 'setzone', aktionId: k.erfasst.id, zone: sel.value }, status);
+        });
+        row.appendChild(sel); row.appendChild(btn);
+      }
+      card.appendChild(row);
+    } else if (k.art === 'viel') {
+      card.appendChild(abEl('span', 'tag tag-viel', 'Zu viel erfasst'));
+      card.appendChild(abEl('p', '', 'Erfasst: ' + k.erfasst.name + ' · Treffer · ' + k.erfasst.zone));
+      card.appendChild(abEl('p', 'dim', 'um ' + abZeitStempel(k.erfasst.ts) + ' Uhr · im Bericht kein passendes Tor'));
+      if (k.grund) card.appendChild(abEl('p', 'dim', k.grund));
+      const sel = document.createElement('select');
+      const optDel = abEl('option', '', 'Löschen'); optDel.value = 'delete';
+      const optFehl = abEl('option', '', 'In Fehlwurf ändern'); optFehl.value = 'tofehl';
+      if (k.standard === 'delete') { sel.appendChild(optDel); sel.appendChild(optFehl); } else { sel.appendChild(optFehl); sel.appendChild(optDel); }
+      const btn = abEl('button', '', 'Anwenden');
+      btn.addEventListener('click', function () {
+        if (sel.value === 'delete' && !confirm('Diesen erfassten Treffer endgültig löschen?')) return;
+        wendeAbgleichAn(spielId, { op: sel.value, aktionId: k.erfasst.id }, status);
+      });
+      row.appendChild(sel); row.appendChild(btn); card.appendChild(row);
+    }
+    card.appendChild(status);
+    el.appendChild(card);
+  });
 }
 
 /* ---------- Komplettexport (Datenhoheit -- Kunde kann jederzeit alles mitnehmen) ---------- */

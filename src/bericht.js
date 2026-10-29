@@ -177,3 +177,126 @@ export function kontrolliereBericht(analyse, kader, erfasst, spiel) {
   }
   return { hinweise: hinweise, spielerinnen: zeilen };
 }
+
+/* ---------- Tore-Abgleich: Spielbericht <-> Erfassung ----------
+ * Vergleicht die Reihenfolge der eigenen Tore im Bericht mit der Reihenfolge der erfassten
+ * Treffer (Längste gemeinsame Teilfolge über "Spielerin + 7m/Feld") und leitet daraus Karten ab:
+ *   fehlt  = Tor im Bericht, in der Erfassung nicht vorhanden  (Zone muss gewählt werden)
+ *   falsch = erfasster Treffer vermutlich der falschen Spielerin zugeordnet
+ *   zone   = richtige Spielerin, aber 7m-/Feldtor-Zuordnung passt nicht
+ *   viel   = erfasster Treffer ohne Entsprechung im Bericht
+ *            (Standard: löschen, wenn <= DOPPEL_SEKUNDEN von einem anderen Treffer entfernt, sonst Fehlwurf)
+ *
+ * acta:    [{ t, typ:'tor'|'tor7', kaderId|null, nr, name, stand }] in Spielzeit-Reihenfolge
+ * erfasst: [{ id, spielerinId, name, zone, ts(ms) }] in Erfassungs-Reihenfolge
+ */
+export const DOPPEL_SEKUNDEN = 15;
+
+export function berechneAbgleich(acta, erfasst) {
+  const A = acta.map(function (a) {
+    return Object.assign({}, a, { key: (a.kaderId || ('u:' + a.nr)) + '|' + (a.typ === 'tor7' ? '7' : 'F') });
+  });
+  const E = erfasst.map(function (e) {
+    return Object.assign({}, e, { key: e.spielerinId + '|' + (e.zone === '7m' ? '7' : 'F') });
+  });
+  const n = A.length, m = E.length;
+
+  const dp = [];
+  for (let i = 0; i <= n; i++) { dp.push(new Array(m + 1).fill(0)); }
+  for (let i = n - 1; i >= 0; i--) {
+    for (let j = m - 1; j >= 0; j--) {
+      dp[i][j] = A[i].key === E[j].key ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+    }
+  }
+  const treffer = [];
+  { let i = 0, j = 0;
+    while (i < n && j < m) {
+      if (A[i].key === E[j].key) { treffer.push([i, j]); i++; j++; }
+      else if (dp[i + 1][j] >= dp[i][j + 1]) i++;
+      else j++;
+    }
+  }
+
+  const karten = [];
+  function naheAnderen(e) {
+    return E.some(function (o) { return o !== e && Math.abs(o.ts - e.ts) <= DOPPEL_SEKUNDEN * 1000; });
+  }
+  function verarbeiteLuecke(as, es, prevTs, nextTs) {
+    const asRest = as.slice(), esRest = es.slice();
+    const paare = [];
+    // 1) gleiche Spielerin, aber 7m/Feld passt nicht
+    es.forEach(function (e) {
+      const a = asRest.find(function (x) { return x.kaderId && x.kaderId === e.spielerinId && x.key !== e.key; });
+      if (a) { paare.push({ art: 'zone', a: a, e: e }); asRest.splice(asRest.indexOf(a), 1); esRest.splice(esRest.indexOf(e), 1); }
+    });
+    // 2) andere Spielerin, gleicher Tor-Typ (7m/Feld), in Reihenfolge
+    esRest.slice().forEach(function (e) {
+      const eTyp = e.key.split('|')[1];
+      const a = asRest.find(function (x) { return x.kaderId && x.key.split('|')[1] === eTyp; });
+      if (a) { paare.push({ art: 'falsch', a: a, e: e }); asRest.splice(asRest.indexOf(a), 1); esRest.splice(esRest.indexOf(e), 1); }
+    });
+    paare.forEach(function (p) {
+      karten.push({
+        art: p.art,
+        erfasst: { id: p.e.id, spielerinId: p.e.spielerinId, name: p.e.name, zone: p.e.zone, ts: p.e.ts },
+        bericht: { t: p.a.t, typ: p.a.typ, kaderId: p.a.kaderId, nr: p.a.nr, name: p.a.name, stand: p.a.stand },
+        zoneVorschlag: p.a.typ === 'tor7' ? '7m' : null
+      });
+    });
+    asRest.forEach(function (a, q) {
+      let ts = null;
+      if (prevTs != null && nextTs != null) ts = Math.round(prevTs + (nextTs - prevTs) * (q + 1) / (asRest.length + 1));
+      else if (prevTs != null) ts = prevTs + 1000 * (q + 1);
+      else if (nextTs != null) ts = nextTs - 1000 * (asRest.length - q);
+      karten.push({
+        art: 'fehlt',
+        bericht: { t: a.t, typ: a.typ, kaderId: a.kaderId, nr: a.nr, name: a.name, stand: a.stand },
+        zoneFix: a.typ === 'tor7' ? '7m' : null,
+        halbzeit: a.t < 1800 ? '1' : '2',
+        ts: ts
+      });
+    });
+    esRest.forEach(function (e) {
+      const doppelt = naheAnderen(e);
+      karten.push({
+        art: 'viel',
+        erfasst: { id: e.id, spielerinId: e.spielerinId, name: e.name, zone: e.zone, ts: e.ts },
+        standard: doppelt ? 'delete' : 'tofehl',
+        grund: doppelt ? 'Weniger als ' + DOPPEL_SEKUNDEN + ' s von einem anderen erfassten Treffer entfernt (vermutlich nicht rückgängig gemacht).' : ''
+      });
+    });
+  }
+
+  let i0 = 0, j0 = 0, prevTs = null;
+  treffer.forEach(function (p) {
+    verarbeiteLuecke(A.slice(i0, p[0]), E.slice(j0, p[1]), prevTs, E[p[1]].ts);
+    i0 = p[0] + 1; j0 = p[1] + 1; prevTs = E[p[1]].ts;
+  });
+  verarbeiteLuecke(A.slice(i0), E.slice(j0), prevTs, null);
+
+  // Nur Reihenfolge vertauscht (z. B. zwei Tablets): "fehlt" und "viel" derselben Spielerin/Tor-Art heben sich auf.
+  const entfernen = {};
+  karten.forEach(function (k, q) {
+    if (k.art !== 'viel') return;
+    const key = k.erfasst.spielerinId + '|' + (k.erfasst.zone === '7m' ? '7' : 'F');
+    const r = karten.findIndex(function (x, idx) {
+      return !entfernen[idx] && x.art === 'fehlt' && x.bericht.kaderId &&
+        (x.bericht.kaderId + '|' + (x.bericht.typ === 'tor7' ? '7' : 'F')) === key;
+    });
+    if (r !== -1) { entfernen[q] = true; entfernen[r] = true; }
+  });
+  const gefiltert = karten.filter(function (k, idx) { return !entfernen[idx]; });
+
+  return { karten: gefiltert, bericht: n, erfasst: m, uebereinstimmend: treffer.length };
+}
+
+/* Spielerin des Berichts -> Kader-Eintrag (zuerst Name, dann eindeutige Rückennummer). */
+export function kaderMatcher(kader) {
+  const nachName = {}, nachNr = {};
+  kader.forEach(function (k) {
+    nachName[normName(k.name)] = k;
+    const nr = String(k.rueckennummer || '').trim();
+    if (nr) nachNr[nr] = nachNr[nr] ? null : k;
+  });
+  return function (nr, name) { return nachName[normName(name)] || nachNr[String(nr)] || null; };
+}

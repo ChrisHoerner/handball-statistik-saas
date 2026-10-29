@@ -323,3 +323,17 @@ nav.tabbar button.active { color: var(--accent); }
 .bericht-radio { display: block; margin: 0.3rem 0; }
 .bericht-radio input { width: 1.1rem; height: 1.1rem; margin-right: 0.4rem; vertical-align: middle; }
 .aus-table tr.bericht-gesamt td { font-weight: 700; }
+
+/* Tore abgleichen */
+.ab-head { background: var(--panel); border-radius: 0.6rem; padding: 0.6rem 0.7rem; margin: 0.5rem 0; font-size: 0.9rem; }
+.ab-card { background: var(--panel); border: 1px solid var(--line); border-radius: 0.6rem; padding: 0.6rem 0.7rem; margin: 0.5rem 0; }
+.ab-card .tag { display: inline-block; font-size: 0.7rem; font-weight: 700; border-radius: 1rem; padding: 0.1rem 0.5rem; margin-bottom: 0.3rem; }
+.ab-card .tag-fehlt { background: var(--hit); color: #0e1712; }
+.ab-card .tag-falsch { background: var(--accent); color: #14171c; }
+.ab-card .tag-viel { background: var(--miss); color: #fff; }
+.ab-card p { margin: 0.15rem 0; font-size: 0.88rem; }
+.ab-card p.dim { color: var(--text-dim); }
+.ab-row { display: flex; gap: 0.5rem; margin-top: 0.5rem; }
+.ab-row select, .ab-row button { flex: 1; padding: 0.6rem; border-radius: 0.5rem; font-size: 0.85rem; }
+.ab-row button { background: var(--accent); color: #14171c; border: none; font-weight: 700; }
+.ab-row button.sec { background: var(--panel-raised); color: var(--text); border: 1px solid var(--line); }
