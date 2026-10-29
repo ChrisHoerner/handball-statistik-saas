@@ -192,6 +192,19 @@ input[type="text"], input[type="date"], input[type="url"], select {
   gap: 0.8rem;
   margin-bottom: 0.8rem;
 }
+.court-row-1 { grid-template-columns: 1fr; gap: 0.5rem; margin-bottom: 0.5rem; }
+.zone-tile-row { display: flex; align-items: stretch; }
+.zone-tile-row .zone-label {
+  width: 5rem;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-bottom: none;
+  border-right: 1px solid var(--line);
+}
+.zone-tile-row .zone-buttons { flex: 1; flex-direction: row; }
+.zone-tile-row .zone-buttons button { flex: 1; }
 .zone-tile {
   background: var(--panel-raised);
   border: 1px solid var(--line);

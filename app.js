@@ -837,9 +837,12 @@ function toggleTwView(isTw) {
    WURF_ZONEN-Reihenfolge, die für Auswertung/Export weiterläuft. */
 const COURT_ROWS = [['Außen', 'Kreis'], ['6m', '9m'], ['7m', 'Konter']];
 
+/* Nur Live-Erfassung (Wurf + Torwart): eine Zone pro Reihe, von oben nach unten. */
+const ERFASSUNG_ZONEN = ['9m', '6m', 'Außen', 'Kreis', 'Konter', '7m'];
+
 function buildZoneTile(zone, hitLabel, missLabel, hitValue, missValue) {
   const tile = document.createElement('div');
-  tile.className = 'zone-tile';
+  tile.className = 'zone-tile zone-tile-row';
   const label = document.createElement('div');
   label.className = 'zone-label';
   label.textContent = zone;
@@ -863,12 +866,10 @@ function buildZoneTile(zone, hitLabel, missLabel, hitValue, missValue) {
 function renderCourtGrid(containerId, hitLabel, missLabel) {
   const el = document.getElementById(containerId);
   el.innerHTML = '';
-  COURT_ROWS.forEach(function (pair) {
+  ERFASSUNG_ZONEN.forEach(function (zone) {
     const row = document.createElement('div');
-    row.className = 'court-row court-row-2';
-    pair.forEach(function (zone) {
-      row.appendChild(buildZoneTile(zone, hitLabel, missLabel, hitLabel, missLabel));
-    });
+    row.className = 'court-row court-row-1';
+    row.appendChild(buildZoneTile(zone, hitLabel, missLabel, hitLabel, missLabel));
     el.appendChild(row);
   });
 }
