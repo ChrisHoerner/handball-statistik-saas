@@ -192,7 +192,34 @@ export function kontrolliereBericht(analyse, kader, erfasst, spiel) {
  */
 export const DOPPEL_SEKUNDEN = 8;
 
-export function berechneAbgleich(acta, erfasst) {
+
+/* Spielzeit-Schätzung für einen erfassten Treffer ohne Entsprechung im Bericht.
+ * Messpunkte: übereinstimmende Tore (Erfassungs-Uhrzeit <-> Spielzeit laut Bericht).
+ * Zwischen zwei Messpunkten wird linear interpoliert, die Halbzeit der Aktion begrenzt den Bereich.
+ * Ohne Messpunkte: Abstand zur ersten erfassten Aktion derselben Halbzeit. */
+function schaetzeSpielzeit(e, prevTs, prevT, nextTs, nextT, ersteTsProHz) {
+  const hz2 = String(e.halbzeit) === '2';
+  const halbStart = hz2 ? 1800 : 0, halbEnde = hz2 ? 3600 : 1800;
+  let von = Math.max(prevT == null ? 0 : prevT, halbStart);
+  let bis = Math.min(nextT == null ? 3600 : nextT, halbEnde);
+  if (bis < von) { von = halbStart; bis = halbEnde; } // Messpunkte widersprechen der Halbzeit-Angabe
+  let est;
+  if (prevTs != null && nextTs != null && nextTs > prevTs) {
+    est = prevT + (e.ts - prevTs) / (nextTs - prevTs) * (nextT - prevT);
+  } else if (prevTs != null) {
+    est = prevT + (e.ts - prevTs) / 1000;
+  } else if (nextTs != null) {
+    est = nextT - (nextTs - e.ts) / 1000;
+  } else {
+    const erste = ersteTsProHz[hz2 ? '2' : '1'];
+    est = halbStart + (erste != null ? (e.ts - erste) / 1000 : 0);
+  }
+  est = Math.min(Math.max(est, von), bis);
+  return { von: Math.round(von), bis: Math.round(bis), ca: Math.round(est) };
+}
+
+export function berechneAbgleich(acta, erfasst, ersteTsProHz) {
+  ersteTsProHz = ersteTsProHz || {};
   const A = acta.map(function (a) {
     return Object.assign({}, a, { key: (a.kaderId || ('u:' + a.nr)) + '|' + (a.typ === 'tor7' ? '7' : 'F') });
   });
@@ -221,7 +248,7 @@ export function berechneAbgleich(acta, erfasst) {
   function naheAnderen(e) {
     return E.some(function (o) { return o !== e && Math.abs(o.ts - e.ts) <= DOPPEL_SEKUNDEN * 1000; });
   }
-  function verarbeiteLuecke(as, es, prevTs, nextTs, prevT, nextT) {
+  function verarbeiteLuecke(as, es, prevTs, nextTs, prevT, nextT, hatPrev, hatNext) {
     const asRest = as.slice(), esRest = es.slice();
     const paare = [];
     // 1) gleiche Spielerin, aber 7m/Feld passt nicht
@@ -262,18 +289,18 @@ export function berechneAbgleich(acta, erfasst) {
         art: 'viel',
         erfasst: { id: e.id, spielerinId: e.spielerinId, name: e.name, zone: e.zone, ts: e.ts },
         standard: doppelt ? 'delete' : 'tofehl',
-        zeitVon: prevT, zeitBis: nextT,
+        zeit: schaetzeSpielzeit(e, hatPrev ? prevTs : null, prevT, hatNext ? nextTs : null, nextT, ersteTsProHz),
         grund: doppelt ? 'Weniger als ' + DOPPEL_SEKUNDEN + ' s von einem anderen erfassten Treffer entfernt (vermutlich nicht rückgängig gemacht).' : ''
       });
     });
   }
 
-  let i0 = 0, j0 = 0, prevTs = null, prevT = 0;
+  let i0 = 0, j0 = 0, prevTs = null, prevT = 0, hatPrev = false;
   treffer.forEach(function (p) {
-    verarbeiteLuecke(A.slice(i0, p[0]), E.slice(j0, p[1]), prevTs, E[p[1]].ts, prevT, A[p[0]].t);
-    i0 = p[0] + 1; j0 = p[1] + 1; prevTs = E[p[1]].ts; prevT = A[p[0]].t;
+    verarbeiteLuecke(A.slice(i0, p[0]), E.slice(j0, p[1]), prevTs, E[p[1]].ts, prevT, A[p[0]].t, hatPrev, true);
+    i0 = p[0] + 1; j0 = p[1] + 1; prevTs = E[p[1]].ts; prevT = A[p[0]].t; hatPrev = true;
   });
-  verarbeiteLuecke(A.slice(i0), E.slice(j0), prevTs, null, prevT, 3600);
+  verarbeiteLuecke(A.slice(i0), E.slice(j0), prevTs, null, prevT, 3600, hatPrev, false);
 
   // Nur Reihenfolge vertauscht (z. B. zwei Tablets): "fehlt" und "viel" derselben Spielerin/Tor-Art heben sich auf.
   const entfernen = {};

@@ -1674,7 +1674,7 @@ function renderAbgleich(el, data, spielId) {
       card.appendChild(abEl('span', 'tag tag-viel', 'Zu viel erfasst'));
       card.appendChild(abEl('p', '', 'Erfasst: ' + k.erfasst.name + ' · Treffer · ' + k.erfasst.zone));
       card.appendChild(abEl('p', 'dim', 'um ' + abZeitStempel(k.erfasst.ts) + ' Uhr · im Bericht kein passendes Tor'));
-      card.appendChild(abEl('p', '', 'Spielzeit: ca. zwischen ' + fmtMinSek(k.zeitVon) + ' und ' + fmtMinSek(k.zeitBis) + ' (nach Bericht)'));
+      card.appendChild(abEl('p', '', 'Spielzeit: ca. ' + fmtMinSek(k.zeit.ca) + ' (Bereich ' + fmtMinSek(k.zeit.von) + '–' + fmtMinSek(k.zeit.bis) + ')'));
       if (k.grund) card.appendChild(abEl('p', 'dim', k.grund));
       const sel = document.createElement('select');
       const optDel = abEl('option', '', 'Löschen'); optDel.value = 'delete';

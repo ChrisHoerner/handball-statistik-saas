@@ -555,14 +555,19 @@ async function handleAbgleich(env, session, url) {
 
   const zonenSql = WURF_ZONEN.map(function () { return '?'; }).join(',');
   const rows = (await env.DB.prepare(
-    `SELECT id, spielerin_id, aktionstyp, zeitstempel FROM aktionen
+    `SELECT id, spielerin_id, aktionstyp, zeitstempel, halbzeit FROM aktionen
      WHERE mannschaft_id = ? AND spiel_id = ? AND ergebnis = 'Treffer' AND aktionstyp IN (${zonenSql})`
   ).bind(session.mannschaft_id, spielId, ...WURF_ZONEN).all()).results || [];
   const erfasst = rows.map(function (r) {
-    return { id: r.id, spielerinId: r.spielerin_id, name: nameById[r.spielerin_id] || r.spielerin_id, zone: r.aktionstyp, ts: Date.parse(r.zeitstempel) || 0 };
+    return { id: r.id, spielerinId: r.spielerin_id, name: nameById[r.spielerin_id] || r.spielerin_id, zone: r.aktionstyp, ts: Date.parse(r.zeitstempel) || 0, halbzeit: r.halbzeit };
   }).sort(function (a, b) { return a.ts - b.ts || (a.id < b.id ? -1 : 1); });
 
-  const ergebnis = berechneAbgleich(acta, erfasst);
+  // Erste erfasste Aktion je Halbzeit (beliebiger Typ) -> Notanker, falls kein Tor übereinstimmt
+  const alle = (await env.DB.prepare('SELECT halbzeit, MIN(zeitstempel) AS erste FROM aktionen WHERE mannschaft_id = ? AND spiel_id = ? GROUP BY halbzeit')
+    .bind(session.mannschaft_id, spielId).all()).results || [];
+  const ersteTsProHz = {};
+  alle.forEach(function (r) { ersteTsProHz[String(r.halbzeit) === '2' ? '2' : '1'] = Date.parse(r.erste) || null; });
+  const ergebnis = berechneAbgleich(acta, erfasst, ersteTsProHz);
   return json({ bericht: ergebnis.bericht, erfasst: ergebnis.erfasst, karten: ergebnis.karten, zonen: WURF_ZONEN });
 }
 
