@@ -127,6 +127,7 @@ async function handleSpieleListe(env, session) {
 async function handleSync(request, env, session) {
   const body = await request.json();
   const results = { spiele: [], aktionen: [], kader: [], kader_runde: [] };
+  const fehler = [];
 
   if (Array.isArray(body.spiele)) {
     for (const s of body.spiele) {
@@ -172,22 +173,29 @@ async function handleSync(request, env, session) {
       } catch (e) {
         // UNIQUE(mannschaft_id, name) verletzt -> Duplikat, bewusst NICHT bestätigt,
         // bleibt in der App als "nicht synchronisiert" sichtbar (siehe Kader-Screen).
+        fehler.push('Kader "' + k.Name + '": ' + e.message);
       }
     }
   }
 
   if (Array.isArray(body.kader_runde)) {
     for (const r of body.kader_runde) {
-      await env.DB.prepare(
-        `INSERT INTO kader_runde (id, mannschaft_id, kader_id, runde, status)
-         VALUES (?, ?, ?, ?, ?)
-         ON CONFLICT(id) DO UPDATE SET status=excluded.status`
-      ).bind(r.id, session.mannschaft_id, r.kader_id, r.Runde, r.Status).run();
-      results.kader_runde.push(r.id);
+      try {
+        await env.DB.prepare(
+          `INSERT INTO kader_runde (id, mannschaft_id, kader_id, runde, status)
+           VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT(id) DO UPDATE SET status=excluded.status`
+        ).bind(r.id, session.mannschaft_id, r.kader_id, r.Runde, r.Status).run();
+        results.kader_runde.push(r.id);
+      } catch (e) {
+        // z. B. Spielerin (kader_id) liegt nicht in D1, weil ihr Kader-Eintrag abgelehnt wurde.
+        // Nicht den ganzen Sync abbrechen -- Rest wird trotzdem bestätigt.
+        fehler.push('Kader-Runde: ' + e.message);
+      }
     }
   }
 
-  return json({ status: 'ok', results: results });
+  return json({ status: 'ok', results: results, fehler: fehler });
 }
 
 async function handleAktionenSpiel(env, session, spielId) {

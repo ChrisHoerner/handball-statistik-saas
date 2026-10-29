@@ -1025,7 +1025,9 @@ async function trySyncInner(manual) {
     }
     await renderGameList();
     updateStatusBar();
-    if (manual) alert('Synchronisiert.');
+    if (data.fehler && data.fehler.length) {
+      if (manual) alert('Teilweise synchronisiert. Probleme:\n' + data.fehler.join('\n'));
+    } else if (manual) alert('Synchronisiert.');
   } catch (e) {
     updateStatusBar();
     if (manual) alert('Sync fehlgeschlagen: ' + e.message);
