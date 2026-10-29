@@ -177,11 +177,11 @@ input[type="text"], input[type="date"], input[type="url"], select {
   border: 1px solid var(--line);
   border-radius: 2rem;
   color: var(--text-dim);
-  font-weight: 600;
+  font-weight: 400;
   white-space: nowrap;
 }
 .player-chip.selected { background: var(--accent); color: #14171c; border-color: var(--accent); }
-.player-chip .num { opacity: 0.7; font-weight: 400; margin-right: 0.3rem; }
+.player-chip .num { opacity: 1; font-weight: 800; margin-right: 0.3rem; }
 
 .action-group { background: var(--panel); border-radius: 0.7rem; padding: 0.7rem; }
 .action-group h2 { margin-bottom: 0.6rem; }
