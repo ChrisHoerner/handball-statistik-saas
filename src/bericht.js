@@ -147,7 +147,7 @@ export function kontrolliereBericht(analyse, kader, erfasst, spiel) {
     } else {
       if (e.treffer !== s.tore) hinweise.push(label + ': Tore laut Spielbericht ' + s.tore + ', erfasst ' + e.treffer + '.');
       if (e.sieben !== s.tore7 + s.fehl7) hinweise.push(label + ': 7m-Würfe laut Spielbericht ' + (s.tore7 + s.fehl7) + ', erfasst ' + e.sieben + '.');
-      if (e.zweiVerursacht !== s.zwei) hinweise.push(label + ': 2-Minuten-Strafen laut Spielbericht ' + s.zwei + ', erfasst („2min verursacht“) ' + e.zweiVerursacht + '.');
+      // 2-Minuten-Strafen: kein Hinweis, "2min verursacht" wird automatisch aus dem Bericht übernommen
     }
     zeilen.push({
       nr: s.nr, name: s.name, kaderId: k ? k.id : null,
@@ -159,8 +159,8 @@ export function kontrolliereBericht(analyse, kader, erfasst, spiel) {
   kader.forEach(function (k) {
     const e = erfasst.perPlayer[k.id];
     if (!e || benutzt[k.id]) return;
-    if (e.treffer || e.sieben || e.zweiVerursacht) {
-      hinweise.push(k.name + ': erfasst (Treffer ' + e.treffer + ', 7m-Würfe ' + e.sieben + ', 2min verursacht ' + e.zweiVerursacht + '), aber im Spielbericht ohne Einträge.');
+    if (e.treffer || e.sieben) {
+      hinweise.push(k.name + ': erfasst (Treffer ' + e.treffer + ', 7m-Würfe ' + e.sieben + '), aber im Spielbericht ohne Einträge.');
     }
   });
 
@@ -168,7 +168,6 @@ export function kontrolliereBericht(analyse, kader, erfasst, spiel) {
   Object.keys(erfasst.perPlayer).forEach(function (id) { summeTreffer += erfasst.perPlayer[id].treffer; });
   if (summeTreffer !== analyse.toreEigen) hinweise.unshift('Team: Tore laut Spielbericht ' + analyse.toreEigen + ', erfasst ' + summeTreffer + '.');
   if (erfasst.gegentore !== analyse.toreGegner) hinweise.unshift('Team: Gegentore laut Spielbericht ' + analyse.toreGegner + ', erfasst (Torwart „Gegentor“) ' + erfasst.gegentore + '.');
-  if (erfasst.zweiGeholt !== analyse.zweiGegner) hinweise.unshift('Team: 2-Minuten-Strafen des Gegners laut Spielbericht ' + analyse.zweiGegner + ', erfasst („2min geholt“) ' + erfasst.zweiGeholt + '.');
   if (spiel && spiel.tore_eigene != null && Number(spiel.tore_eigene) !== analyse.toreEigen) {
     hinweise.unshift('Endstand: eingetragene Tore ' + spiel.tore_eigene + ', laut Spielbericht ' + analyse.toreEigen + '.');
   }

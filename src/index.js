@@ -425,6 +425,15 @@ async function uebernehme2MinAusBericht(env, session, spielId, own, events) {
     neu.push({ id: crypto.randomUUID(), spielerinId: k.id, halbzeit: e.t < 1800 ? '1' : '2' });
   });
 
+  // Nichts schreiben, wenn der Bestand schon dem Bericht entspricht (je Spielerin und Halbzeit)
+  const vorhanden = (await env.DB.prepare(
+    "SELECT spielerin_id, halbzeit FROM aktionen WHERE mannschaft_id = ? AND spiel_id = ? AND aktionstyp = '2min verursacht'"
+  ).bind(session.mannschaft_id, spielId).all()).results || [];
+  const schluessel = function (id, hz) { return id + '|' + hz; };
+  const a1 = vorhanden.map(function (v) { return schluessel(v.spielerin_id, String(v.halbzeit)); }).sort().join(',');
+  const a2 = neu.map(function (n) { return schluessel(n.spielerinId, n.halbzeit); }).sort().join(',');
+  if (a1 === a2) return { uebernommen: neu.length, uebersprungen: uebersprungen, geaendert: false };
+
   const stmts = [
     env.DB.prepare("DELETE FROM aktionen WHERE mannschaft_id = ? AND spiel_id = ? AND aktionstyp = '2min verursacht'")
       .bind(session.mannschaft_id, spielId)
@@ -480,6 +489,8 @@ async function handleBerichtAuswertung(env, session, url) {
     if (!row) { ohneBericht.push({ spielId: sp.id, datum: sp.datum, gegner: sp.gegner }); continue; }
     const bericht = JSON.parse(row.daten);
     const analyse = analysiereBericht(bericht);
+    // "2min verursacht" immer aus dem Bericht ableiten (auch für früher hochgeladene Berichte)
+    try { await uebernehme2MinAusBericht(env, session, sp.id, bericht.own, bericht.events || []); } catch (err) { /* Auswertung trotzdem liefern */ }
 
     const akt = (await env.DB.prepare('SELECT spielerin_id, aktionstyp, ergebnis FROM aktionen WHERE mannschaft_id = ? AND spiel_id = ?')
       .bind(session.mannschaft_id, sp.id).all()).results || [];
