@@ -15,7 +15,7 @@
  *  2. Ersten Kunden + Zugangscodes anlegen (siehe seed.sql)
  */
 
-import { analysiereBericht, kontrolliereBericht, berechneAbgleich, kaderMatcher, normName, SEGMENT_NAMEN } from './bericht.js';
+import { analysiereBericht, kontrolliereBericht, berechneAbgleich, berechneGegentorAbgleich, kaderMatcher, normName, SEGMENT_NAMEN } from './bericht.js';
 
 const SESSION_TTL_TAGE = 180;
 
@@ -545,7 +545,7 @@ async function handleAbgleich(env, session, url) {
   const bericht = JSON.parse(row.daten);
   const own = bericht.own;
 
-  const kader = (await env.DB.prepare('SELECT id, name, rueckennummer FROM kader WHERE mannschaft_id = ?')
+  const kader = (await env.DB.prepare('SELECT id, name, rueckennummer, position FROM kader WHERE mannschaft_id = ?')
     .bind(session.mannschaft_id).all()).results || [];
   const finde = kaderMatcher(kader);
   const nameById = {};
@@ -555,13 +555,14 @@ async function handleAbgleich(env, session, url) {
   const events = (bericht.events || []).slice().sort(function (a, b) { return a.t - b.t; });
   let tEigen = 0, tGegner = 0;
   const acta = [];
+  const actaGegner = [];
   events.forEach(function (e) {
     if (e.typ !== 'tor' && e.typ !== 'tor7') return;
     if (e.team === own) {
       tEigen++;
       const k = finde(e.nr, e.name);
       acta.push({ t: e.t, typ: e.typ, kaderId: k ? k.id : null, nr: e.nr, name: e.name, stand: tEigen + ':' + tGegner });
-    } else { tGegner++; }
+    } else { tGegner++; actaGegner.push({ t: e.t, stand: tEigen + ':' + tGegner }); }
   });
 
   const zonenSql = WURF_ZONEN.map(function () { return '?'; }).join(',');
@@ -579,7 +580,20 @@ async function handleAbgleich(env, session, url) {
   const ersteTsProHz = {};
   alle.forEach(function (r) { ersteTsProHz[String(r.halbzeit) === '2' ? '2' : '1'] = Date.parse(r.erste) || null; });
   const ergebnis = berechneAbgleich(acta, erfasst, ersteTsProHz);
-  return json({ bericht: ergebnis.bericht, erfasst: ergebnis.erfasst, karten: ergebnis.karten, zonen: WURF_ZONEN });
+
+  const gtRows = (await env.DB.prepare(
+    `SELECT id, spielerin_id, aktionstyp, zeitstempel, halbzeit FROM aktionen
+     WHERE mannschaft_id = ? AND spiel_id = ? AND ergebnis = 'Gegentor' AND aktionstyp IN (${zonenSql})`
+  ).bind(session.mannschaft_id, spielId, ...WURF_ZONEN).all()).results || [];
+  const gtErfasst = gtRows.map(function (r) {
+    return { id: r.id, spielerinId: r.spielerin_id, name: nameById[r.spielerin_id] || r.spielerin_id, zone: r.aktionstyp, ts: Date.parse(r.zeitstempel) || 0, halbzeit: r.halbzeit };
+  });
+  const gt = berechneGegentorAbgleich(actaGegner, gtErfasst, ergebnis.anker, ersteTsProHz);
+  const torhueterinnen = kader.filter(function (k) { return k.position === 'TW'; }).map(function (k) { return { id: k.id, name: k.name, nr: k.rueckennummer || '' }; });
+  return json({
+    bericht: ergebnis.bericht, erfasst: ergebnis.erfasst, karten: ergebnis.karten, zonen: WURF_ZONEN,
+    gegentore: { bericht: gt.bericht, erfasst: gt.erfasst, karten: gt.karten, torhueterinnen: torhueterinnen }
+  });
 }
 
 async function handleAbgleichAnwenden(request, env, session) {
@@ -609,6 +623,29 @@ async function handleAbgleichAnwenden(request, env, session) {
       `INSERT INTO aktionen (id, mannschaft_id, spiel_id, spielerin_id, halbzeit, aktionstyp, ergebnis, quelle, zeitstempel)
        VALUES (?, ?, ?, ?, ?, ?, 'Treffer', ?, ?)`
     ).bind(crypto.randomUUID(), session.mannschaft_id, spielId, op.spielerinId, op.halbzeit === '2' ? '2' : '1', op.zone, quelle, ts).run();
+    return json({ status: 'ok' });
+  }
+
+  if (op.op === 'gtadd') {
+    if (WURF_ZONEN.indexOf(op.zone) === -1) return json({ error: 'Zone ist Pflicht.' }, 400);
+    if (!(await pruefeSpielerin(op.spielerinId))) return json({ error: 'Torhüterin nicht gefunden.' }, 404);
+    const ts = Number(op.ts) > 0 ? new Date(Number(op.ts)).toISOString() : new Date().toISOString();
+    await env.DB.prepare(
+      `INSERT INTO aktionen (id, mannschaft_id, spiel_id, spielerin_id, halbzeit, aktionstyp, ergebnis, quelle, zeitstempel)
+       VALUES (?, ?, ?, ?, ?, ?, 'Gegentor', ?, ?)`
+    ).bind(crypto.randomUUID(), session.mannschaft_id, spielId, op.spielerinId, op.halbzeit === '2' ? '2' : '1', op.zone, quelle, ts).run();
+    return json({ status: 'ok' });
+  }
+  if (op.op === 'gtdelete' || op.op === 'gttoparade') {
+    const g = await env.DB.prepare("SELECT id FROM aktionen WHERE id = ? AND mannschaft_id = ? AND spiel_id = ? AND ergebnis = 'Gegentor'")
+      .bind(op.aktionId, session.mannschaft_id, spielId).first();
+    if (!g) return json({ error: 'Erfasstes Gegentor nicht gefunden (evtl. schon geändert).' }, 404);
+    if (op.op === 'gtdelete') {
+      await env.DB.prepare('DELETE FROM aktionen WHERE id = ? AND mannschaft_id = ?').bind(g.id, session.mannschaft_id).run();
+    } else {
+      await env.DB.prepare("UPDATE aktionen SET ergebnis = 'Parade', quelle = ? WHERE id = ? AND mannschaft_id = ?")
+        .bind(quelle, g.id, session.mannschaft_id).run();
+    }
     return json({ status: 'ok' });
   }
 

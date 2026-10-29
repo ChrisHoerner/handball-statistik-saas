@@ -1690,6 +1690,64 @@ function renderAbgleich(el, data, spielId) {
     card.appendChild(status);
     el.appendChild(card);
   });
+
+  renderGegentorAbgleich(el, data, spielId);
+}
+
+function renderGegentorAbgleich(el, data, spielId) {
+  const gt = data.gegentore;
+  if (!gt) return;
+  el.appendChild(abEl('div', 'aus-section-title', 'Gegentore abgleichen'));
+  const kopf = abEl('div', 'ab-head');
+  kopf.innerHTML = 'Spielbericht: <b>' + gt.bericht + '</b> Gegentore · erfasst: <b>' + gt.erfasst + '</b> Gegentore<br>' +
+    (gt.karten.length ? gt.karten.length + ' Abweichung' + (gt.karten.length === 1 ? '' : 'en') + ' gefunden (Zuordnung über die Spielzeit-Schätzung)' : 'Keine Abweichungen.');
+  el.appendChild(kopf);
+
+  gt.karten.forEach(function (k) {
+    const card = abEl('div', 'ab-card');
+    const status = abEl('p', 'hint');
+    const row = abEl('div', 'ab-row');
+    if (k.art === 'gt_viel') {
+      card.appendChild(abEl('span', 'tag tag-viel', 'Gegentor zu viel erfasst'));
+      card.appendChild(abEl('p', '', 'Erfasst: ' + k.erfasst.name + ' · Gegentor · ' + k.erfasst.zone));
+      card.appendChild(abEl('p', 'dim', 'um ' + abZeitStempel(k.erfasst.ts) + ' Uhr · im Bericht kein passendes Gegentor'));
+      card.appendChild(abEl('p', '', 'Spielzeit: ca. ' + fmtMinSek(k.zeit.ca) + ' (Bereich ' + fmtMinSek(k.zeit.von) + '–' + fmtMinSek(k.zeit.bis) + ')'));
+      if (k.grund) card.appendChild(abEl('p', 'dim', k.grund));
+      const sel = document.createElement('select');
+      const optDel = abEl('option', '', 'Löschen'); optDel.value = 'gtdelete';
+      const optPar = abEl('option', '', 'In Parade ändern'); optPar.value = 'gttoparade';
+      if (k.standard === 'delete') { sel.appendChild(optDel); sel.appendChild(optPar); } else { sel.appendChild(optPar); sel.appendChild(optDel); }
+      const btn = abEl('button', '', 'Anwenden');
+      btn.addEventListener('click', function () {
+        if (sel.value === 'gtdelete' && !confirm('Dieses erfasste Gegentor endgültig löschen?')) return;
+        wendeAbgleichAn(spielId, { op: sel.value, aktionId: k.erfasst.id }, status);
+      });
+      row.appendChild(sel); row.appendChild(btn); card.appendChild(row);
+    } else if (k.art === 'gt_fehlt') {
+      card.appendChild(abEl('span', 'tag tag-fehlt', 'Gegentor fehlt in der Erfassung'));
+      card.appendChild(abEl('p', '', 'Bericht: Gegentor · ' + fmtMinSek(k.bericht.t) + ' (' + (k.bericht.t < 1800 ? '1.' : '2.') + ' HZ) · Stand ' + k.bericht.stand));
+      if (!gt.torhueterinnen.length) {
+        card.appendChild(abEl('p', 'dim', 'Keine Torhüterin im Kader (Position TW) gefunden.'));
+      } else {
+        const tw = document.createElement('select');
+        const leer = abEl('option', '', 'Torhüterin wählen …'); leer.value = '';
+        tw.appendChild(leer);
+        gt.torhueterinnen.forEach(function (t) {
+          const o = abEl('option', '', (t.nr ? '#' + t.nr + ' ' : '') + t.name); o.value = t.id; tw.appendChild(o);
+        });
+        if (gt.torhueterinnen.length === 1) tw.value = gt.torhueterinnen[0].id;
+        const zone = abZoneSelect(data.zonen, false);
+        const btn = abEl('button', '', 'Ergänzen');
+        btn.addEventListener('click', function () {
+          if (!tw.value || !zone.value) { status.textContent = 'Torhüterin und Zone sind Pflicht.'; return; }
+          wendeAbgleichAn(spielId, { op: 'gtadd', spielerinId: tw.value, zone: zone.value, halbzeit: k.halbzeit, ts: k.ts }, status);
+        });
+        row.appendChild(tw); row.appendChild(zone); row.appendChild(btn); card.appendChild(row);
+      }
+    }
+    card.appendChild(status);
+    el.appendChild(card);
+  });
 }
 
 /* ---------- Komplettexport (Datenhoheit -- Kunde kann jederzeit alles mitnehmen) ---------- */

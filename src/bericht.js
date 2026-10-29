@@ -294,6 +294,7 @@ export function berechneAbgleich(acta, erfasst, ersteTsProHz) {
     });
   }
 
+  const anker = treffer.map(function (p) { return { ts: E[p[1]].ts, t: A[p[0]].t }; });
   let i0 = 0, j0 = 0, prevTs = null, prevT = 0, hatPrev = false;
   treffer.forEach(function (p) {
     verarbeiteLuecke(A.slice(i0, p[0]), E.slice(j0, p[1]), prevTs, E[p[1]].ts, prevT, A[p[0]].t, hatPrev, true);
@@ -314,7 +315,92 @@ export function berechneAbgleich(acta, erfasst, ersteTsProHz) {
   });
   const gefiltert = karten.filter(function (k, idx) { return !entfernen[idx]; });
 
-  return { karten: gefiltert, bericht: n, erfasst: m, uebereinstimmend: treffer.length };
+  return { karten: gefiltert, bericht: n, erfasst: m, uebereinstimmend: treffer.length, anker: anker };
+}
+
+
+/* ---------- Gegentore-Abgleich ----------
+ * Der Bericht nennt bei Gegner-Toren keine Person, nur die Spielzeit. Erfasste Gegentore (Torhüterin)
+ * werden über die Messpunkte (übereinstimmende eigene Tore: Uhrzeit <-> Spielzeit) auf eine geschätzte
+ * Spielzeit gebracht und per Reihenfolge-Abgleich (Edit-Distanz) den Berichts-Gegentoren zugeordnet.
+ *   gt_viel  = erfasstes Gegentor ohne Entsprechung im Bericht (Standard: löschen bei Doppeltipp, sonst "Parade")
+ *   gt_fehlt = Gegentor im Bericht ohne Entsprechung in der Erfassung (Torhüterin + Zone nötig)
+ *
+ * actaGegner: [{ t, stand }]   erfasst: [{ id, spielerinId, name, zone, ts, halbzeit }]   anker: [{ ts, t }]
+ */
+const GT_SKIP_SEKUNDEN = 60;
+
+function ankerUmgebung(anker, ts) {
+  let prev = null, next = null;
+  anker.forEach(function (a) {
+    if (a.ts <= ts) { if (!prev || a.ts > prev.ts) prev = a; }
+    else if (!next || a.ts < next.ts) next = a;
+  });
+  return { prev: prev, next: next };
+}
+
+export function berechneGegentorAbgleich(actaGegner, erfasst, anker, ersteTsProHz) {
+  ersteTsProHz = ersteTsProHz || {};
+  anker = (anker || []).slice().sort(function (a, b) { return a.ts - b.ts; });
+  const E = erfasst.slice().sort(function (a, b) { return a.ts - b.ts || (a.id < b.id ? -1 : 1); }).map(function (e) {
+    const u = ankerUmgebung(anker, e.ts);
+    const z = schaetzeSpielzeit(e, u.prev ? u.prev.ts : null, u.prev ? u.prev.t : 0, u.next ? u.next.ts : null, u.next ? u.next.t : null, ersteTsProHz);
+    return Object.assign({}, e, { zeit: z });
+  });
+  const A = actaGegner.slice().sort(function (a, b) { return a.t - b.t; });
+  const n = A.length, m = E.length, S = GT_SKIP_SEKUNDEN;
+
+  // dp[i][j] = minimale Kosten für A[i..], E[j..]
+  const dp = [];
+  for (let i = 0; i <= n; i++) dp.push(new Array(m + 1).fill(0));
+  for (let i = n; i >= 0; i--) {
+    for (let j = m; j >= 0; j--) {
+      if (i === n && j === m) { dp[i][j] = 0; continue; }
+      let best = Infinity;
+      if (i < n) best = Math.min(best, dp[i + 1][j] + S);
+      if (j < m) best = Math.min(best, dp[i][j + 1] + S);
+      if (i < n && j < m) best = Math.min(best, dp[i + 1][j + 1] + Math.abs(A[i].t - E[j].zeit.ca));
+      dp[i][j] = best;
+    }
+  }
+  const aGepaart = {}, eGepaart = {};
+  { let i = 0, j = 0;
+    while (i < n || j < m) {
+      if (i < n && j < m && dp[i][j] === dp[i + 1][j + 1] + Math.abs(A[i].t - E[j].zeit.ca)) { aGepaart[i] = true; eGepaart[j] = true; i++; j++; }
+      else if (i < n && dp[i][j] === dp[i + 1][j] + S) i++;
+      else j++;
+    }
+  }
+
+  function ts_aus_zeit(t) {
+    // Umkehrung: Spielzeit -> Uhrzeit (lineare Interpolation zwischen den Messpunkten)
+    const nachT = anker.slice().sort(function (a, b) { return a.t - b.t; });
+    let prev = null, next = null;
+    nachT.forEach(function (a) { if (a.t <= t) prev = a; else if (!next) next = a; });
+    if (prev && next && next.t > prev.t) return Math.round(prev.ts + (t - prev.t) / (next.t - prev.t) * (next.ts - prev.ts));
+    if (prev) return prev.ts + (t - prev.t) * 1000;
+    if (next) return next.ts - (next.t - t) * 1000;
+    const hz2 = t >= 1800, erste = ersteTsProHz[hz2 ? '2' : '1'];
+    return erste != null ? erste + (t - (hz2 ? 1800 : 0)) * 1000 : null;
+  }
+
+  const karten = [];
+  A.forEach(function (a, i) {
+    if (aGepaart[i]) return;
+    karten.push({ art: 'gt_fehlt', bericht: { t: a.t, stand: a.stand }, halbzeit: a.t < 1800 ? '1' : '2', ts: ts_aus_zeit(a.t) });
+  });
+  E.forEach(function (e, j) {
+    if (eGepaart[j]) return;
+    const doppelt = E.some(function (o, q) { return q !== j && Math.abs(o.ts - e.ts) <= DOPPEL_SEKUNDEN * 1000; });
+    karten.push({
+      art: 'gt_viel',
+      erfasst: { id: e.id, spielerinId: e.spielerinId, name: e.name, zone: e.zone, ts: e.ts },
+      standard: doppelt ? 'delete' : 'toparade',
+      zeit: e.zeit,
+      grund: doppelt ? 'Weniger als ' + DOPPEL_SEKUNDEN + ' s von einem anderen erfassten Gegentor entfernt (vermutlich nicht rückgängig gemacht).' : ''
+    });
+  });
+  return { karten: karten, bericht: n, erfasst: m };
 }
 
 /* Spielerin des Berichts -> Kader-Eintrag (zuerst Name, dann eindeutige Rückennummer). */
