@@ -996,7 +996,7 @@ async function trySyncInner(manual) {
       body: JSON.stringify({ spiele: games, aktionen: events, kader: kaderChanges, kader_runde: kaderRundeChanges })
     });
     const data = await res.json();
-    if (data.status !== 'ok') throw new Error('Backend meldet Fehler');
+    if (data.status !== 'ok') throw new Error('Backend meldet Fehler' + (data.error ? ': ' + data.error : '') + ' (HTTP ' + res.status + ')');
 
     const confirmedSpiele = (data.results && data.results.spiele) || [];
     const confirmedAktionen = (data.results && data.results.aktionen) || [];
