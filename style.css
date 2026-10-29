@@ -315,3 +315,11 @@ nav.tabbar button.active { color: var(--accent); }
 #fehlerEinzelRow .btn-grid button { padding: 0.8rem 0.2rem; font-size: 0.78rem; }
 #fehlerEinzelRow.phase-abwehr #einzelGroup { grid-column: 1 / -1; }
 #fehlerEinzelRow.phase-abwehr .btn-grid { grid-template-columns: repeat(auto-fill, minmax(6.5rem, 1fr)); }
+
+/* Spielbericht */
+.bericht-hinweis { background: var(--panel); border: 1px solid var(--miss); border-radius: 0.5rem; padding: 0.5rem 0.7rem; margin: 0.5rem 0; font-size: 0.85rem; }
+.bericht-hinweis ul { margin: 0.3rem 0 0; padding-left: 1.1rem; }
+.bericht-ok { color: var(--hit); font-size: 0.85rem; margin: 0.3rem 0; }
+.bericht-radio { display: block; margin: 0.3rem 0; }
+.bericht-radio input { width: 1.1rem; height: 1.1rem; margin-right: 0.4rem; vertical-align: middle; }
+.aus-table tr.bericht-gesamt td { font-weight: 700; }

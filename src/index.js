@@ -15,6 +15,8 @@
  *  2. Ersten Kunden + Zugangscodes anlegen (siehe seed.sql)
  */
 
+import { analysiereBericht, kontrolliereBericht, SEGMENT_NAMEN } from './bericht.js';
+
 const SESSION_TTL_TAGE = 180;
 
 /* ---------- Statistik-Berechnung (identisch zur Logik aus apps-script.gs) ---------- */
@@ -129,38 +131,7 @@ async function handleSync(request, env, session) {
   const results = { spiele: [], aktionen: [], kader: [], kader_runde: [], kader_remap: {} };
   const fehler = [];
 
-  if (Array.isArray(body.spiele)) {
-    for (const s of body.spiele) {
-      await env.DB.prepare(
-        `INSERT INTO spiele (id, mannschaft_id, datum, gegner, runde, tore_eigene, tore_gegner, status, aktive_spielerinnen)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(id) DO UPDATE SET datum=excluded.datum, gegner=excluded.gegner, runde=excluded.runde,
-           tore_eigene=excluded.tore_eigene, tore_gegner=excluded.tore_gegner, status=excluded.status,
-           aktive_spielerinnen=excluded.aktive_spielerinnen`
-      ).bind(
-        s.SpielID, session.mannschaft_id, s.Datum, s.Gegner, s.Runde,
-        s.Tore_eigene === '' ? null : s.Tore_eigene,
-        s.Tore_gegner === '' ? null : s.Tore_gegner,
-        s.Status || '',
-        JSON.stringify(s.AktiveSpielerinnen || [])
-      ).run();
-      results.spiele.push(s.SpielID);
-    }
-  }
-
-  if (Array.isArray(body.aktionen)) {
-    for (const a of body.aktionen) {
-      await env.DB.prepare(
-        `INSERT INTO aktionen (id, mannschaft_id, spiel_id, spielerin_id, halbzeit, aktionstyp, ergebnis, quelle, zeitstempel)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(id) DO NOTHING`
-      ).bind(
-        a.AktionID, session.mannschaft_id, a.SpielID, a.SpielerinID, a.Halbzeit, a.Aktionstyp, a.Ergebnis, a.Quelle, a.Zeitstempel
-      ).run();
-      results.aktionen.push(a.AktionID);
-    }
-  }
-
+  // Reihenfolge wegen Fremdschlüsseln: Kader -> Kader-Runde -> Spiele -> Aktionen
   if (Array.isArray(body.kader)) {
     for (const k of body.kader) {
       try {
@@ -209,6 +180,38 @@ async function handleSync(request, env, session) {
       } catch (e) {
         fehler.push('Kader-Runde: ' + e.message);
       }
+    }
+  }
+
+  if (Array.isArray(body.spiele)) {
+    for (const s of body.spiele) {
+      await env.DB.prepare(
+        `INSERT INTO spiele (id, mannschaft_id, datum, gegner, runde, tore_eigene, tore_gegner, status, aktive_spielerinnen)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET datum=excluded.datum, gegner=excluded.gegner, runde=excluded.runde,
+           tore_eigene=excluded.tore_eigene, tore_gegner=excluded.tore_gegner, status=excluded.status,
+           aktive_spielerinnen=excluded.aktive_spielerinnen`
+      ).bind(
+        s.SpielID, session.mannschaft_id, s.Datum, s.Gegner, s.Runde,
+        s.Tore_eigene === '' ? null : s.Tore_eigene,
+        s.Tore_gegner === '' ? null : s.Tore_gegner,
+        s.Status || '',
+        JSON.stringify(s.AktiveSpielerinnen || [])
+      ).run();
+      results.spiele.push(s.SpielID);
+    }
+  }
+
+  if (Array.isArray(body.aktionen)) {
+    for (const a of body.aktionen) {
+      await env.DB.prepare(
+        `INSERT INTO aktionen (id, mannschaft_id, spiel_id, spielerin_id, halbzeit, aktionstyp, ergebnis, quelle, zeitstempel)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO NOTHING`
+      ).bind(
+        a.AktionID, session.mannschaft_id, a.SpielID, a.SpielerinID, a.Halbzeit, a.Aktionstyp, a.Ergebnis, a.Quelle, a.Zeitstempel
+      ).run();
+      results.aktionen.push(a.AktionID);
     }
   }
 
@@ -306,12 +309,165 @@ async function handleExportAll(env, session) {
     'SELECT id AS AktionID, spiel_id AS SpielID, spielerin_id AS SpielerinID, halbzeit AS Halbzeit, aktionstyp AS Aktionstyp, ergebnis AS Ergebnis, quelle AS Quelle, zeitstempel AS Zeitstempel FROM aktionen WHERE mannschaft_id = ?'
   ).bind(session.mannschaft_id).all();
 
+  await stelleSpielberichtSchemaSicher(env);
+  const berichte = await env.DB.prepare('SELECT spiel_id, daten FROM spielbericht WHERE mannschaft_id = ?')
+    .bind(session.mannschaft_id).all();
+  const berichtEreignisse = [];
+  (berichte.results || []).forEach(function (b) {
+    const d = JSON.parse(b.daten);
+    (d.events || []).forEach(function (e) {
+      berichtEreignisse.push({ SpielID: b.spiel_id, Eigene_Seite: d.own, Sekunden: e.t, Team: e.team, Typ: e.typ, Nr: e.nr || '', Name: e.name || '' });
+    });
+  });
+
   return json({
     kader: kader.results || [],
     kader_runde: kaderRunde.results || [],
     spiele: spiele.results || [],
-    aktionen: aktionen.results || []
+    aktionen: aktionen.results || [],
+    spielbericht_ereignisse: berichtEreignisse
   });
+}
+
+/* ---------- Spielbericht (PDF "Acta Completa", vom Client eingelesen) ----------
+ * Gespeichert wird nur der eigene Spielverlauf-Ausschnitt (Ereignisse, Personen nur der
+ * eigenen Mannschaft). Tabelle wird beim ersten Zugriff automatisch angelegt, damit keine
+ * manuelle Migration nötig ist (steht zusätzlich in d1-schema.sql).
+ */
+let spielberichtSchemaBereit = false;
+async function stelleSpielberichtSchemaSicher(env) {
+  if (spielberichtSchemaBereit) return;
+  await env.DB.prepare(
+    `CREATE TABLE IF NOT EXISTS spielbericht (
+       spiel_id TEXT PRIMARY KEY,
+       mannschaft_id INTEGER NOT NULL REFERENCES mannschaften(id),
+       daten TEXT NOT NULL,
+       created_at TEXT NOT NULL DEFAULT (datetime('now'))
+     )`
+  ).run();
+  await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_spielbericht_mannschaft ON spielbericht(mannschaft_id)').run();
+  spielberichtSchemaBereit = true;
+}
+
+const BERICHT_TYPEN = ['tor', 'tor7', 'fehl7', 'zwei', 'gelb', 'rot', 'auszeit'];
+
+async function handleSpielberichtSpeichern(request, env, session) {
+  if (session.rolle !== 'admin') return json({ error: 'Nur Admin darf Spielberichte hochladen.' }, 403);
+  await stelleSpielberichtSchemaSicher(env);
+  const body = await request.json();
+  const spielId = body.spielId;
+  const own = body.own === 'Gast' ? 'Gast' : (body.own === 'Heim' ? 'Heim' : null);
+  if (!spielId || !own || !Array.isArray(body.events) || !body.events.length) {
+    return json({ error: 'spielId, own und events sind nötig.' }, 400);
+  }
+  const spiel = await env.DB.prepare('SELECT id FROM spiele WHERE id = ? AND mannschaft_id = ?')
+    .bind(spielId, session.mannschaft_id).first();
+  if (!spiel) return json({ error: 'Spiel nicht gefunden – ist es schon synchronisiert?' }, 404);
+
+  // Defensiv bereinigen: nur bekannte Typen, Personen nur für die eigene Mannschaft
+  const events = [];
+  for (const e of body.events) {
+    if (BERICHT_TYPEN.indexOf(e.typ) === -1 || (e.team !== 'Heim' && e.team !== 'Gast')) continue;
+    const t = Number(e.t);
+    if (!(t >= 0 && t <= 7200)) continue;
+    const ev = { t: t, team: e.team, typ: e.typ };
+    if (e.team === own) { ev.nr = String(e.nr || '').slice(0, 4); ev.name = String(e.name || '').slice(0, 80); }
+    events.push(ev);
+  }
+  const m = body.meta || {};
+  const meta = {
+    spielnummer: String(m.spielnummer || '').slice(0, 40), datum: String(m.datum || '').slice(0, 10),
+    heim: String(m.heim || '').slice(0, 80), gast: String(m.gast || '').slice(0, 80),
+    endstand: Array.isArray(m.endstand) ? m.endstand.map(Number) : null,
+    halbzeit: Array.isArray(m.halbzeit) ? m.halbzeit.map(Number) : null
+  };
+  await env.DB.prepare(
+    `INSERT INTO spielbericht (spiel_id, mannschaft_id, daten) VALUES (?, ?, ?)
+     ON CONFLICT(spiel_id) DO UPDATE SET daten = excluded.daten, created_at = datetime('now')`
+  ).bind(spielId, session.mannschaft_id, JSON.stringify({ own: own, meta: meta, events: events })).run();
+  return json({ status: 'ok', ereignisse: events.length });
+}
+
+function summiere(ziel, quelle) {
+  ziel.sek += quelle.sek; ziel.tore += quelle.tore; ziel.gegentore += quelle.gegentore; ziel.phasen += quelle.phasen;
+}
+
+async function handleBerichtAuswertung(env, session, url) {
+  await stelleSpielberichtSchemaSicher(env);
+  const zeitraum = url.searchParams.get('zeitraum');
+  const runde = url.searchParams.get('runde');
+  if (!zeitraum) return json({ error: 'zeitraum fehlt' }, 400);
+
+  let spiele;
+  if (zeitraum === 'runde') {
+    spiele = (await env.DB.prepare(
+      'SELECT id, datum, gegner, tore_eigene, tore_gegner FROM spiele WHERE mannschaft_id = ? AND runde = ? ORDER BY datum'
+    ).bind(session.mannschaft_id, runde || '').all()).results || [];
+  } else {
+    spiele = (await env.DB.prepare(
+      'SELECT id, datum, gegner, tore_eigene, tore_gegner FROM spiele WHERE mannschaft_id = ? AND id = ?'
+    ).bind(session.mannschaft_id, zeitraum).all()).results || [];
+  }
+  if (!spiele.length) return json({ spiele: [], ohneBericht: [], gesamt: null });
+
+  const kader = (await env.DB.prepare('SELECT id, name, rueckennummer FROM kader WHERE mannschaft_id = ?')
+    .bind(session.mannschaft_id).all()).results || [];
+
+  const gesamt = {
+    ueberzahl: { sek: 0, tore: 0, gegentore: 0, phasen: 0 },
+    unterzahl: { sek: 0, tore: 0, gegentore: 0, phasen: 0 },
+    drittel: SEGMENT_NAMEN.map(function (n) { return { name: n, tore: 0, gegentore: 0 }; }),
+    strafen: {}
+  };
+  const ergebnis = [];
+  const ohneBericht = [];
+
+  for (const sp of spiele) {
+    const row = await env.DB.prepare('SELECT daten FROM spielbericht WHERE spiel_id = ? AND mannschaft_id = ?')
+      .bind(sp.id, session.mannschaft_id).first();
+    if (!row) { ohneBericht.push({ spielId: sp.id, datum: sp.datum, gegner: sp.gegner }); continue; }
+    const bericht = JSON.parse(row.daten);
+    const analyse = analysiereBericht(bericht);
+
+    const akt = (await env.DB.prepare('SELECT spielerin_id, aktionstyp, ergebnis FROM aktionen WHERE mannschaft_id = ? AND spiel_id = ?')
+      .bind(session.mannschaft_id, sp.id).all()).results || [];
+    const erfasst = { perPlayer: {}, gegentore: 0, zweiGeholt: 0 };
+    akt.forEach(function (a) {
+      const p = erfasst.perPlayer[a.spielerin_id] || (erfasst.perPlayer[a.spielerin_id] = { treffer: 0, sieben: 0, zweiVerursacht: 0 });
+      if (WURF_ZONEN.indexOf(a.aktionstyp) !== -1) {
+        if (a.ergebnis === 'Treffer') p.treffer++;
+        if (a.aktionstyp === '7m' && (a.ergebnis === 'Treffer' || a.ergebnis === 'Fehlwurf')) p.sieben++;
+        if (a.ergebnis === 'Gegentor') erfasst.gegentore++;
+      }
+      if (a.aktionstyp === '2min verursacht') p.zweiVerursacht++;
+      if (a.aktionstyp === '2min geholt') erfasst.zweiGeholt++;
+    });
+    const kontrolle = kontrolliereBericht(analyse, kader, erfasst, sp);
+
+    summiere(gesamt.ueberzahl, analyse.ueberzahl);
+    summiere(gesamt.unterzahl, analyse.unterzahl);
+    analyse.drittel.forEach(function (d, i) { gesamt.drittel[i].tore += d.tore; gesamt.drittel[i].gegentore += d.gegentore; });
+    kontrolle.spielerinnen.forEach(function (z) {
+      const key = normNameServer(z.name);
+      const g = gesamt.strafen[key] || (gesamt.strafen[key] = { nr: z.nr, name: z.name, zwei: 0, gelb: 0, rot: 0, erfasstZwei: 0, erfasstMoeglich: true });
+      g.zwei += z.acta.zwei; g.gelb += z.acta.gelb; g.rot += z.acta.rot;
+      if (z.erfasst) g.erfasstZwei += z.erfasst.zwei; else g.erfasstMoeglich = false;
+    });
+
+    ergebnis.push({
+      spielId: sp.id, datum: sp.datum, gegner: sp.gegner, own: bericht.own, meta: bericht.meta,
+      ueberzahl: analyse.ueberzahl, unterzahl: analyse.unterzahl, drittel: analyse.drittel,
+      toreEigen: analyse.toreEigen, toreGegner: analyse.toreGegner, hinweise: kontrolle.hinweise
+    });
+  }
+  gesamt.strafen = Object.keys(gesamt.strafen).map(function (k) { return gesamt.strafen[k]; })
+    .filter(function (g) { return g.zwei || g.gelb || g.rot || g.erfasstZwei; })
+    .sort(function (a, b) { return (b.zwei + b.gelb + b.rot) - (a.zwei + a.gelb + a.rot) || a.name.localeCompare(b.name, 'de'); });
+  return json({ spiele: ergebnis, ohneBericht: ohneBericht, gesamt: ergebnis.length ? gesamt : null });
+}
+
+function normNameServer(s) {
+  return String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ').trim();
 }
 
 /* ---------- Eigenen Code ändern (kein Eingriff durch den Anbieter nötig) ---------- */
@@ -374,6 +530,12 @@ async function handleApi(request, env, url) {
   }
   if (request.method === 'GET' && action === 'exportAll') {
     return handleExportAll(env, session);
+  }
+  if (request.method === 'POST' && action === 'spielbericht') {
+    return handleSpielberichtSpeichern(request, env, session);
+  }
+  if (request.method === 'GET' && action === 'berichtAuswertung') {
+    return handleBerichtAuswertung(env, session, url);
   }
   if (request.method === 'POST' && action === 'changeCode') {
     return handleChangeCode(request, env, session);

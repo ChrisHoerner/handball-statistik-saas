@@ -247,6 +247,15 @@
     <div id="ausErgebnis"></div>
     <button class="secondary-btn" id="btnExportAuswertung" style="margin-top:0.8rem">Auswertung als CSV exportieren</button>
     <button class="secondary-btn" id="btnExportAktionen" style="margin-top:0.5rem">Aktionen dieses Spiels als CSV exportieren</button>
+
+    <h2 style="margin-top:1.4rem">Spielbericht</h2>
+    <div id="berichtUpload" style="display:none">
+      <p class="hint">Oben ein einzelnes Spiel wählen, dann den Spielbericht (PDF) einlesen. Gespeichert wird nur der Spielverlauf; Personen des Gegners werden nicht übernommen.</p>
+      <input type="file" id="berichtFile" accept="application/pdf" style="margin-top:0.5rem">
+      <div id="berichtVorschau"></div>
+    </div>
+    <button class="secondary-btn" id="btnBerichtAuswertung" style="margin-top:0.5rem">Spielbericht-Auswertung anzeigen</button>
+    <div id="berichtErgebnis"></div>
   </section>
 
   <nav class="tabbar" id="tabbar" style="display:none">
@@ -259,6 +268,7 @@
   </nav>
 
 </div>
+<script src="/acta.js"></script>
 <script src="/app.js"></script>
 </body>
 </html>

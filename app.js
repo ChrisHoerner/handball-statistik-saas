@@ -365,6 +365,8 @@ function bindUI() {
   document.getElementById('btnErfasserUebersicht').addEventListener('click', showErfasserUebersicht);
   document.getElementById('btnExportAuswertung').addEventListener('click', exportAuswertungCSV);
   document.getElementById('btnExportAktionen').addEventListener('click', exportAktionenCSV);
+  document.getElementById('btnBerichtAuswertung').addEventListener('click', showBerichtAuswertung);
+  document.getElementById('berichtFile').addEventListener('change', onBerichtFile);
 
   document.getElementById('syncBtn').addEventListener('click', function () { trySync(true); });
 
@@ -1086,6 +1088,7 @@ async function updateStatusBar() {
 /* ---------- Auswertung ---------- */
 
 async function populateAuswertungSelects() {
+  document.getElementById('berichtUpload').style.display = state.role === 'admin' ? '' : 'none';
   const spielerinSelect = document.getElementById('ausSpielerin');
   spielerinSelect.innerHTML = '';
   state.roster.forEach(function (p) {
@@ -1322,6 +1325,226 @@ async function exportAktionenCSV() {
   }
 }
 
+/* ---------- Spielbericht (PDF "Acta Completa") ---------- */
+
+function escHtml(s) {
+  return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; });
+}
+
+function fmtMinSek(sek) {
+  return Math.floor(sek / 60) + ':' + String(sek % 60).padStart(2, '0');
+}
+
+let pdfJsPromise = null;
+function loadPdfJs() {
+  if (window.pdfjsLib) return Promise.resolve(window.pdfjsLib);
+  if (pdfJsPromise) return pdfJsPromise;
+  pdfJsPromise = new Promise(function (resolve, reject) {
+    const s = document.createElement('script');
+    s.src = '/pdfjs/pdf.min.js';
+    s.onload = function () {
+      window.pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdfjs/pdf.worker.min.js';
+      resolve(window.pdfjsLib);
+    };
+    s.onerror = function () { pdfJsPromise = null; reject(new Error('PDF-Bibliothek konnte nicht geladen werden (kein Netz?).')); };
+    document.head.appendChild(s);
+  });
+  return pdfJsPromise;
+}
+
+async function leseActaPdf(file) {
+  const pdfjs = await loadPdfJs();
+  const data = new Uint8Array(await file.arrayBuffer());
+  const doc = await pdfjs.getDocument({ data: data }).promise;
+  const pages = [];
+  for (let p = 1; p <= doc.numPages; p++) {
+    const page = await doc.getPage(p);
+    const tc = await page.getTextContent();
+    pages.push(tc.items
+      .filter(function (i) { return i.str && i.str.trim(); })
+      .map(function (i) { return { s: i.str, x: Math.round(i.transform[4]), y: Math.round(i.transform[5]) }; }));
+  }
+  return window.ActaParser.parseActaPages(pages);
+}
+
+let geleseneBerichtDaten = null;
+
+function normForMatch(s) {
+  return String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+function ratEigeneSeite(meta, gegnerName) {
+  const g = normForMatch(gegnerName);
+  const heim = normForMatch(meta.heim), gast = normForMatch(meta.gast);
+  if (g) {
+    if (heim && (heim.indexOf(g) !== -1 || g.indexOf(heim) !== -1)) return 'Gast';
+    if (gast && (gast.indexOf(g) !== -1 || g.indexOf(gast) !== -1)) return 'Heim';
+  }
+  try {
+    const last = normForMatch(localStorage.getItem('actaEigenesTeam'));
+    if (last) {
+      if (heim === last) return 'Heim';
+      if (gast === last) return 'Gast';
+    }
+  } catch (e) { /* ohne localStorage kein Vorschlag */ }
+  return '';
+}
+
+async function onBerichtFile() {
+  const input = document.getElementById('berichtFile');
+  const el = document.getElementById('berichtVorschau');
+  geleseneBerichtDaten = null;
+  if (!input.files || !input.files[0]) { el.innerHTML = ''; return; }
+  if (state.role !== 'admin') { el.innerHTML = '<p class="aus-empty">Nur Admin darf Spielberichte hochladen.</p>'; return; }
+  const zeitraum = document.getElementById('ausZeitraum').value;
+  if (zeitraum === 'runde') { el.innerHTML = '<p class="aus-empty">Bitte oben ein einzelnes Spiel auswählen (nicht „Ganze Runde“).</p>'; return; }
+  el.innerHTML = '<p class="aus-empty">Lese PDF …</p>';
+  try {
+    const parsed = await leseActaPdf(input.files[0]);
+    geleseneBerichtDaten = parsed;
+    const meta = parsed.meta;
+    const info = selectedSpielInfo();
+    const vorschlag = ratEigeneSeite(meta, info.gegner);
+
+    let html = '<div class="aus-section-title">Spielbericht erkannt</div>' +
+      '<p>' + escHtml(meta.heim) + ' : ' + escHtml(meta.gast) + '<br>' +
+      (meta.endstand ? meta.endstand[0] + ':' + meta.endstand[1] : '–') +
+      (meta.halbzeit ? ' (' + meta.halbzeit[0] + ':' + meta.halbzeit[1] + ')' : '') +
+      ' · ' + escHtml(meta.datum) + ' · ' + parsed.events.length + ' Ereignisse</p>';
+
+    if (parsed.warnungen.length) {
+      html += '<div class="bericht-hinweis"><strong>Nicht gespeichert – Bericht nicht eindeutig lesbar:</strong><ul>' +
+        parsed.warnungen.map(function (w) { return '<li>' + escHtml(w) + '</li>'; }).join('') + '</ul></div>';
+      el.innerHTML = html;
+      return;
+    }
+    if (meta.datum && info.datum && meta.datum !== info.datum) {
+      html += '<div class="bericht-hinweis">Achtung: Datum im Bericht (' + escHtml(meta.datum) + ') weicht vom gewählten Spiel (' + escHtml(info.datum) + ' · ' + escHtml(info.gegner) + ') ab.</div>';
+    }
+    html += '<p class="hint">Welche Mannschaft seid ihr?</p>' +
+      '<label class="bericht-radio"><input type="radio" name="berichtOwn" value="Heim"' + (vorschlag === 'Heim' ? ' checked' : '') + '> ' + escHtml(meta.heim) + ' (Heim)</label>' +
+      '<label class="bericht-radio"><input type="radio" name="berichtOwn" value="Gast"' + (vorschlag === 'Gast' ? ' checked' : '') + '> ' + escHtml(meta.gast) + ' (Gast)</label>' +
+      '<button class="primary-btn" id="btnBerichtSpeichern" style="margin-top:0.6rem">Für „' + escHtml(info.datum) + ' · ' + escHtml(info.gegner) + '“ speichern</button>' +
+      '<p class="hint" id="berichtSpeicherStatus"></p>';
+    el.innerHTML = html;
+    document.getElementById('btnBerichtSpeichern').addEventListener('click', speichereBericht);
+  } catch (e) {
+    el.innerHTML = '<p class="aus-empty">Fehler beim Lesen: ' + escHtml(e.message) + '</p>';
+  }
+}
+
+async function speichereBericht() {
+  const status = document.getElementById('berichtSpeicherStatus');
+  const gewaehlt = document.querySelector('input[name="berichtOwn"]:checked');
+  if (!geleseneBerichtDaten) return;
+  if (!gewaehlt) { status.textContent = 'Bitte die eigene Mannschaft wählen.'; return; }
+  const own = gewaehlt.value;
+  const zeitraum = document.getElementById('ausZeitraum').value;
+  const btn = document.getElementById('btnBerichtSpeichern');
+  btn.disabled = true;
+  status.textContent = 'Speichere …';
+  try {
+    const payload = window.ActaParser.fuerUpload(geleseneBerichtDaten, own);
+    payload.spielId = zeitraum;
+    const res = await authFetch(API_BASE + '?action=spielbericht', {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain' },
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+    if (data.status !== 'ok') throw new Error(data.error || 'Backend meldet Fehler (HTTP ' + res.status + ')');
+    try { localStorage.setItem('actaEigenesTeam', own === 'Heim' ? geleseneBerichtDaten.meta.heim : geleseneBerichtDaten.meta.gast); } catch (e) { /* optional */ }
+    status.textContent = 'Gespeichert (' + data.ereignisse + ' Ereignisse).';
+    geleseneBerichtDaten = null;
+    showBerichtAuswertung();
+  } catch (e) {
+    status.textContent = 'Speichern fehlgeschlagen: ' + e.message;
+    btn.disabled = false;
+  }
+}
+
+async function showBerichtAuswertung() {
+  const el = document.getElementById('berichtErgebnis');
+  const zeitraum = document.getElementById('ausZeitraum').value;
+  el.innerHTML = '<p class="aus-empty">Lade …</p>';
+  const rundeParam = zeitraum === 'runde' ? '&runde=' + encodeURIComponent(state.runde) : '';
+  try {
+    const res = await authFetch(API_BASE + '?action=berichtAuswertung&zeitraum=' + encodeURIComponent(zeitraum) + rundeParam);
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    renderBerichtAuswertung(el, data);
+  } catch (e) {
+    el.innerHTML = '<p class="aus-empty">Fehler beim Laden – kein Netz? (' + escHtml(e.message) + ')</p>';
+  }
+}
+
+function spielLabel(s) { return escHtml(s.datum) + ' · ' + escHtml(s.gegner); }
+
+function berichtZustandTabelle(titel, key, data) {
+  const n = data.spiele.length;
+  let t = '<div class="aus-section-title">' + titel + '</div><table class="aus-table"><tr><th>Spiel</th><th>Dauer</th><th>Strafen</th><th>Tore</th><th>Gegentore</th><th>Diff.</th></tr>';
+  function zeile(label, z, fett) {
+    const d = z.tore - z.gegentore;
+    return '<tr' + (fett ? ' class="bericht-gesamt"' : '') + '><td>' + label + '</td><td>' + fmtMinSek(z.sek) + '</td><td>' + z.phasen + '</td><td>' + z.tore + '</td><td>' + z.gegentore + '</td><td>' + (d > 0 ? '+' : '') + d + '</td></tr>';
+  }
+  if (n > 1) data.spiele.forEach(function (s) { t += zeile(spielLabel(s), s[key], false); });
+  t += zeile('Gesamt', data.gesamt[key], true) + '</table>';
+  return t;
+}
+
+function renderBerichtAuswertung(el, data) {
+  let html = '';
+  if (data.ohneBericht && data.ohneBericht.length) {
+    html += '<p class="hint">Kein Spielbericht hinterlegt für: ' + data.ohneBericht.map(function (s) { return escHtml(s.datum) + ' · ' + escHtml(s.gegner); }).join('; ') + '</p>';
+  }
+  if (!data.gesamt) {
+    el.innerHTML = html + '<p class="aus-empty">Für diesen Zeitraum liegt noch kein Spielbericht vor.</p>';
+    return;
+  }
+
+  // Kontrolle gegen die Erfassung
+  html += '<div class="aus-section-title">Kontrolle gegen Erfassung</div>';
+  data.spiele.forEach(function (s) {
+    if (s.hinweise.length) {
+      html += '<div class="bericht-hinweis"><strong>' + spielLabel(s) + '</strong><ul>' +
+        s.hinweise.map(function (h) { return '<li>' + escHtml(h) + '</li>'; }).join('') + '</ul></div>';
+    } else {
+      html += '<p class="bericht-ok">' + spielLabel(s) + ': keine Abweichungen.</p>';
+    }
+  });
+
+  html += berichtZustandTabelle('Überzahl', 'ueberzahl', data);
+  html += berichtZustandTabelle('Unterzahl', 'unterzahl', data);
+
+  // Spielverlauf: Halbzeiten gedrittelt
+  const n = data.spiele.length;
+  html += '<div class="aus-section-title">Spielverlauf (Halbzeiten gedrittelt)</div><table class="aus-table"><tr><th>Abschnitt</th><th>Tore</th><th>Gegentore</th><th>Diff.</th><th>' + (n === 1 ? 'Stand' : 'Ø Diff./Spiel') + '</th></tr>';
+  data.gesamt.drittel.forEach(function (d, i) {
+    const diff = d.tore - d.gegentore;
+    const letzte = n === 1 ? data.spiele[0].drittel[i] : null;
+    const extra = n === 1
+      ? letzte.standEigen + ':' + letzte.standGegner
+      : (Math.round((diff / n) * 10) / 10);
+    html += '<tr><td>' + escHtml(d.name) + '</td><td>' + d.tore + '</td><td>' + d.gegentore + '</td><td>' + (diff > 0 ? '+' : '') + diff + '</td><td>' + extra + '</td></tr>';
+  });
+  html += '</table>';
+
+  // Strafen pro Spielerin
+  html += '<div class="aus-section-title">Strafen pro Spielerin</div>';
+  if (!data.gesamt.strafen.length) {
+    html += '<p class="aus-empty">Keine Strafen.</p>';
+  } else {
+    html += '<table class="aus-table"><tr><th>Spielerin</th><th>2 min</th><th>Gelb</th><th>Rot</th><th>Erfasst 2 min</th></tr>';
+    data.gesamt.strafen.forEach(function (p) {
+      const abw = p.erfasstMoeglich && p.erfasstZwei !== p.zwei;
+      html += '<tr><td>#' + escHtml(p.nr) + ' ' + escHtml(p.name) + '</td><td>' + p.zwei + '</td><td>' + p.gelb + '</td><td>' + p.rot + '</td><td>' +
+        (p.erfasstMoeglich ? p.erfasstZwei + (abw ? ' ⚠' : '') : '–') + '</td></tr>';
+    });
+    html += '</table>';
+  }
+  el.innerHTML = html;
+}
+
 /* ---------- Komplettexport (Datenhoheit -- Kunde kann jederzeit alles mitnehmen) ---------- */
 async function exportAllCSV() {
   const btn = document.getElementById('btnExportAll');
@@ -1338,7 +1561,8 @@ async function exportAllCSV() {
       { name: 'kader', spalten: ['SpielerinID', 'Name', 'Rückennummer', 'Position'], rows: data.kader },
       { name: 'kader_runde', spalten: ['SpielerinID', 'Runde', 'Status'], rows: data.kader_runde },
       { name: 'spiele', spalten: ['SpielID', 'Datum', 'Gegner', 'Runde', 'Tore_eigene', 'Tore_gegner', 'Status'], rows: data.spiele },
-      { name: 'aktionen', spalten: ['AktionID', 'SpielID', 'SpielerinID', 'Halbzeit', 'Aktionstyp', 'Ergebnis', 'Quelle', 'Zeitstempel'], rows: data.aktionen }
+      { name: 'aktionen', spalten: ['AktionID', 'SpielID', 'SpielerinID', 'Halbzeit', 'Aktionstyp', 'Ergebnis', 'Quelle', 'Zeitstempel'], rows: data.aktionen },
+      { name: 'spielbericht_ereignisse', spalten: ['SpielID', 'Eigene_Seite', 'Sekunden', 'Team', 'Typ', 'Nr', 'Name'], rows: data.spielbericht_ereignisse }
     ];
 
     tabellen.forEach(function (t) {
