@@ -15,7 +15,7 @@
  *  2. Ersten Kunden + Zugangscodes anlegen (siehe seed.sql)
  */
 
-import { analysiereBericht, kontrolliereBericht, SEGMENT_NAMEN } from './bericht.js';
+import { analysiereBericht, kontrolliereBericht, normName, SEGMENT_NAMEN } from './bericht.js';
 
 const SESSION_TTL_TAGE = 180;
 
@@ -203,7 +203,21 @@ async function handleSync(request, env, session) {
   }
 
   if (Array.isArray(body.aktionen)) {
+    // Hat das Spiel einen Spielbericht, kommen "2min verursacht" ausschließlich daraus --
+    // spät synchronisierte Tablet-Einträge werden bestätigt, aber nicht gespeichert (sonst doppelt).
+    await stelleSpielberichtSchemaSicher(env);
+    const berichtSpiele = {};
     for (const a of body.aktionen) {
+      if (a.Aktionstyp !== '2min verursacht' || berichtSpiele[a.SpielID] !== undefined) continue;
+      const hat = await env.DB.prepare('SELECT 1 AS x FROM spielbericht WHERE spiel_id = ? AND mannschaft_id = ?')
+        .bind(a.SpielID, session.mannschaft_id).first();
+      berichtSpiele[a.SpielID] = !!hat;
+    }
+    for (const a of body.aktionen) {
+      if (a.Aktionstyp === '2min verursacht' && berichtSpiele[a.SpielID]) {
+        results.aktionen.push(a.AktionID);
+        continue;
+      }
       await env.DB.prepare(
         `INSERT INTO aktionen (id, mannschaft_id, spiel_id, spielerin_id, halbzeit, aktionstyp, ergebnis, quelle, zeitstempel)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -385,7 +399,45 @@ async function handleSpielberichtSpeichern(request, env, session) {
     `INSERT INTO spielbericht (spiel_id, mannschaft_id, daten) VALUES (?, ?, ?)
      ON CONFLICT(spiel_id) DO UPDATE SET daten = excluded.daten, created_at = datetime('now')`
   ).bind(spielId, session.mannschaft_id, JSON.stringify({ own: own, meta: meta, events: events })).run();
-  return json({ status: 'ok', ereignisse: events.length });
+
+  const zwei = await uebernehme2MinAusBericht(env, session, spielId, own, events);
+  return json({ status: 'ok', ereignisse: events.length, zweiUebernommen: zwei.uebernommen, zweiUebersprungen: zwei.uebersprungen });
+}
+
+/* "2min verursacht" kommt 1:1 aus dem Spielbericht: erfasste Einträge dieses Spiels werden ersetzt
+   durch die Zeitstrafen der eigenen Spielerinnen laut Bericht (Quelle "Spielbericht"). */
+async function uebernehme2MinAusBericht(env, session, spielId, own, events) {
+  const kader = (await env.DB.prepare('SELECT id, name, rueckennummer FROM kader WHERE mannschaft_id = ?')
+    .bind(session.mannschaft_id).all()).results || [];
+  const nachName = {}, nachNr = {};
+  kader.forEach(function (k) {
+    nachName[normName(k.name)] = k;
+    const nr = String(k.rueckennummer || '').trim();
+    if (nr) nachNr[nr] = nachNr[nr] ? null : k;
+  });
+
+  const neu = [];
+  const uebersprungen = [];
+  events.forEach(function (e) {
+    if (e.typ !== 'zwei' || e.team !== own) return;
+    const k = nachName[normName(e.name)] || nachNr[String(e.nr)] || null;
+    if (!k) { uebersprungen.push('#' + e.nr + ' ' + e.name); return; }
+    neu.push({ id: crypto.randomUUID(), spielerinId: k.id, halbzeit: e.t < 1800 ? '1' : '2' });
+  });
+
+  const stmts = [
+    env.DB.prepare("DELETE FROM aktionen WHERE mannschaft_id = ? AND spiel_id = ? AND aktionstyp = '2min verursacht'")
+      .bind(session.mannschaft_id, spielId)
+  ];
+  const jetzt = new Date().toISOString();
+  neu.forEach(function (n) {
+    stmts.push(env.DB.prepare(
+      `INSERT INTO aktionen (id, mannschaft_id, spiel_id, spielerin_id, halbzeit, aktionstyp, ergebnis, quelle, zeitstempel)
+       VALUES (?, ?, ?, ?, ?, '2min verursacht', '', 'Spielbericht', ?)`
+    ).bind(n.id, session.mannschaft_id, spielId, n.spielerinId, n.halbzeit, jetzt));
+  });
+  await env.DB.batch(stmts);
+  return { uebernommen: neu.length, uebersprungen: uebersprungen };
 }
 
 function summiere(ziel, quelle) {

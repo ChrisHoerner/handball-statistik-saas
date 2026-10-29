@@ -1454,7 +1454,8 @@ async function speichereBericht() {
     const data = await res.json();
     if (data.status !== 'ok') throw new Error(data.error || 'Backend meldet Fehler (HTTP ' + res.status + ')');
     try { localStorage.setItem('actaEigenesTeam', own === 'Heim' ? geleseneBerichtDaten.meta.heim : geleseneBerichtDaten.meta.gast); } catch (e) { /* optional */ }
-    status.textContent = 'Gespeichert (' + data.ereignisse + ' Ereignisse).';
+    status.textContent = 'Gespeichert (' + data.ereignisse + ' Ereignisse). 2-Minuten-Strafen aus dem Bericht übernommen: ' + (data.zweiUebernommen || 0) + '.' +
+      (data.zweiUebersprungen && data.zweiUebersprungen.length ? ' Nicht im Kader gefunden (übersprungen): ' + data.zweiUebersprungen.join(', ') + '.' : '');
     geleseneBerichtDaten = null;
     showBerichtAuswertung();
   } catch (e) {
