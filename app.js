@@ -403,6 +403,24 @@ function showScreen(name) {
  * Namensabgleich mit bereits lokal angelegten Spielerinnen verhindert
  * Duplikate beim Import.
  */
+/* Schreibt eine lokale Spielerinnen-ID auf die Server-ID um (Kader, Runde-Einträge, Aktionen). */
+async function remapKaderId(oldId, newId) {
+  if (!oldId || !newId || oldId === newId) return;
+  const k = await idbGet('kader', oldId);
+  if (k) {
+    await idbDelete('kader', oldId);
+    const bestehend = await idbGet('kader', newId);
+    await idbPut('kader', Object.assign({}, bestehend || k, { id: newId, Rückennummer: k.Rückennummer, Position: k.Position, synced: true }));
+  }
+  for (const r of await idbGetAll('kader_runde')) {
+    if (r.kader_id === oldId) { r.kader_id = newId; await idbPut('kader_runde', r); }
+  }
+  for (const e of await idbGetAll('events')) {
+    if (e.SpielerinID === oldId) { e.SpielerinID = newId; await idbPut('events', e); }
+  }
+  if (state.selectedPlayerId === oldId) state.selectedPlayerId = newId;
+}
+
 async function loadRosterFromBackend() {
   const runde = document.getElementById('rundeSelect').value.trim();
   document.getElementById('rosterStatus').textContent = 'Lade …';
@@ -420,8 +438,16 @@ async function loadRosterFromBackend() {
 
     for (const p of data) {
       let kaderEntry = existingByName[p.Name];
+      if (kaderEntry && p.SpielerinID && kaderEntry.id !== p.SpielerinID) {
+        await remapKaderId(kaderEntry.id, p.SpielerinID);
+        kaderEntry = await idbGet('kader', p.SpielerinID);
+        existingByName[p.Name] = kaderEntry;
+        for (const r of await idbGetAll('kader_runde')) {
+          if (r.Runde === runde && r.kader_id === kaderEntry.id) rundeByKaderId[kaderEntry.id] = r;
+        }
+      }
       if (!kaderEntry) {
-        kaderEntry = { id: uid(), Name: p.Name, Rückennummer: p.Rückennummer, Position: p.Position, synced: true };
+        kaderEntry = { id: p.SpielerinID || uid(), Name: p.Name, Rückennummer: p.Rückennummer, Position: p.Position, synced: true };
       } else {
         kaderEntry.Rückennummer = p.Rückennummer;
         kaderEntry.Position = p.Position;
@@ -1017,12 +1043,19 @@ async function trySyncInner(manual) {
         if (r) r.synced = true;
       }
     }
+    const kaderRemap = (data.results && data.results.kader_remap) || {};
+    for (const oldId of Object.keys(kaderRemap)) await remapKaderId(oldId, kaderRemap[oldId]);
     for (const k of kaderChanges) {
       if (confirmedKader.indexOf(k.id) !== -1) { k.synced = true; await idbPut('kader', k); }
     }
-    for (const r of kaderRundeChanges) {
-      if (confirmedKaderRunde.indexOf(r.id) !== -1) { r.synced = true; await idbPut('kader_runde', r); }
+    for (const r0 of kaderRundeChanges) {
+      if (confirmedKaderRunde.indexOf(r0.id) !== -1) {
+        const r = (await idbGet('kader_runde', r0.id)) || r0;
+        r.synced = true;
+        await idbPut('kader_runde', r);
+      }
     }
+    if (Object.keys(kaderRemap).length) { await refreshRoster(); renderPlayerStrip(); }
     await renderGameList();
     updateStatusBar();
     if (data.fehler && data.fehler.length) {

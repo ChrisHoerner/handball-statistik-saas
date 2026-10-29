@@ -126,7 +126,7 @@ async function handleSpieleListe(env, session) {
 /* ---------- Sync (POST) ---------- */
 async function handleSync(request, env, session) {
   const body = await request.json();
-  const results = { spiele: [], aktionen: [], kader: [], kader_runde: [] };
+  const results = { spiele: [], aktionen: [], kader: [], kader_runde: [], kader_remap: {} };
   const fehler = [];
 
   if (Array.isArray(body.spiele)) {
@@ -171,25 +171,42 @@ async function handleSync(request, env, session) {
         ).bind(k.id, session.mannschaft_id, k.Name, k.Rückennummer || '', k.Position).run();
         results.kader.push(k.id);
       } catch (e) {
-        // UNIQUE(mannschaft_id, name) verletzt -> Duplikat, bewusst NICHT bestätigt,
-        // bleibt in der App als "nicht synchronisiert" sichtbar (siehe Kader-Screen).
-        fehler.push('Kader "' + k.Name + '": ' + e.message);
+        // UNIQUE(mannschaft_id, name) verletzt: Es gibt schon eine Spielerin mit diesem Namen
+        // (z. B. von anderem Gerät). Diese bestehende Zeile wird übernommen und dem Client
+        // ihre ID zurückgemeldet (kader_remap), statt den Sync scheitern zu lassen.
+        const vorhanden = await env.DB.prepare('SELECT id FROM kader WHERE mannschaft_id = ? AND name = ?')
+          .bind(session.mannschaft_id, k.Name).first();
+        if (vorhanden) {
+          await env.DB.prepare('UPDATE kader SET rueckennummer = ?, position = ? WHERE id = ? AND mannschaft_id = ?')
+            .bind(k.Rückennummer || '', k.Position, vorhanden.id, session.mannschaft_id).run();
+          results.kader_remap[k.id] = vorhanden.id;
+        } else {
+          fehler.push('Kader "' + k.Name + '": ' + e.message);
+        }
       }
     }
   }
 
   if (Array.isArray(body.kader_runde)) {
     for (const r of body.kader_runde) {
+      const kaderId = results.kader_remap[r.kader_id] || r.kader_id;
       try {
-        await env.DB.prepare(
-          `INSERT INTO kader_runde (id, mannschaft_id, kader_id, runde, status)
-           VALUES (?, ?, ?, ?, ?)
-           ON CONFLICT(id) DO UPDATE SET status=excluded.status`
-        ).bind(r.id, session.mannschaft_id, r.kader_id, r.Runde, r.Status).run();
+        const vorhanden = await env.DB.prepare(
+          'SELECT id FROM kader_runde WHERE mannschaft_id = ? AND kader_id = ? AND runde = ?'
+        ).bind(session.mannschaft_id, kaderId, r.Runde).first();
+        if (vorhanden && vorhanden.id !== r.id) {
+          // Es gibt schon einen Eintrag für diese Spielerin+Runde -> nur Status übernehmen.
+          await env.DB.prepare('UPDATE kader_runde SET status = ? WHERE id = ? AND mannschaft_id = ?')
+            .bind(r.Status, vorhanden.id, session.mannschaft_id).run();
+        } else {
+          await env.DB.prepare(
+            `INSERT INTO kader_runde (id, mannschaft_id, kader_id, runde, status)
+             VALUES (?, ?, ?, ?, ?)
+             ON CONFLICT(id) DO UPDATE SET status=excluded.status`
+          ).bind(r.id, session.mannschaft_id, kaderId, r.Runde, r.Status).run();
+        }
         results.kader_runde.push(r.id);
       } catch (e) {
-        // z. B. Spielerin (kader_id) liegt nicht in D1, weil ihr Kader-Eintrag abgelehnt wurde.
-        // Nicht den ganzen Sync abbrechen -- Rest wird trotzdem bestätigt.
         fehler.push('Kader-Runde: ' + e.message);
       }
     }
