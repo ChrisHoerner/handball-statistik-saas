@@ -304,3 +304,14 @@ nav.tabbar button.active { color: var(--accent); }
 .aus-table th { color: var(--text-dim); font-weight: 600; }
 .aus-section-title { font-weight: 700; margin: 1rem 0 0.4rem; }
 .aus-empty { color: var(--text-dim); font-size: 0.9rem; }
+
+/* Angriff: Eigener Fehler links (1. Drittel), Einzelereignisse rechts (3. Drittel), Mitte frei */
+#fehlerEinzelRow { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.5rem; }
+#fehlerEinzelRow .action-group { padding: 0.5rem; }
+#fehlerEinzelRow .action-group h2 { font-size: 0.8rem; }
+#fehlerEinzelRow #fehlerGroup { grid-column: 1; }
+#fehlerEinzelRow #einzelGroup { grid-column: 3; }
+#fehlerEinzelRow .btn-grid { grid-template-columns: 1fr; }
+#fehlerEinzelRow .btn-grid button { padding: 0.8rem 0.2rem; font-size: 0.78rem; }
+#fehlerEinzelRow.phase-abwehr #einzelGroup { grid-column: 1 / -1; }
+#fehlerEinzelRow.phase-abwehr .btn-grid { grid-template-columns: repeat(auto-fill, minmax(6.5rem, 1fr)); }

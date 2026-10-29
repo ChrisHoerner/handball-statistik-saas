@@ -20,7 +20,7 @@ const SESSION_TTL_TAGE = 180;
 /* ---------- Statistik-Berechnung (identisch zur Logik aus apps-script.gs) ---------- */
 const WURF_ZONEN = ['9m', '6m', 'Außen', 'Kreis', 'Konter', '7m'];
 const BALLGEWINN = ['Techn. Fehler provoziert', 'Pass abgefangen', 'Rausprellen', 'Block'];
-const FEHLER = ['Fehlpass', 'Schritte', 'Stürmerfoul', 'Kreisfehler', 'Doppeltipp', 'Ballverlust'];
+const FEHLER = ['Fehlpass', 'Schritte', 'Stürmerfoul', 'Kreisfehler', 'Doppeltipp', 'Ballverlust', 'TF'];
 const EINZEL = ['Assist', '7m geholt', '7m verursacht', '2min geholt', '2min verursacht'];
 
 function emptyStats() {

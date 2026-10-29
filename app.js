@@ -1,7 +1,9 @@
 /* ---------- Konfiguration ---------- */
 const WURF_ZONEN = ['9m', '6m', 'Außen', 'Kreis', 'Konter', '7m'];
 const BALLGEWINN = ['Techn. Fehler provoziert', 'Pass abgefangen', 'Rausprellen', 'Block'];
-const FEHLER = ['Fehlpass', 'Schritte', 'Stürmerfoul', 'Kreisfehler', 'Doppeltipp', 'Ballverlust'];
+const FEHLER = ['Fehlpass', 'Schritte', 'Stürmerfoul', 'Kreisfehler', 'Doppeltipp', 'Ballverlust', 'TF'];
+/* Live-Erfassung zeigt nur diese Fehler; FEHLER (voll) bleibt für Auswertung/CSV, damit alte Daten sichtbar bleiben. */
+const FEHLER_ERFASSUNG = ['Fehlpass', 'Ballverlust', 'TF'];
 const EINZEL = ['Assist', '7m geholt', '7m verursacht', '2min geholt', '2min verursacht'];
 /* Nur für die Live-Erfassung: Teilmengen je Spielphase. Auswertung/CSV/Server
    nutzen weiterhin die vollständige EINZEL-Liste oben, unverändert. */
@@ -774,7 +776,7 @@ async function renderLiveScreen() {
   renderPlayerStrip();
   renderWurfRows();
   renderGrid('ballgewinnGrid', BALLGEWINN);
-  renderGrid('fehlerGrid', FEHLER);
+  renderGrid('fehlerGrid', FEHLER_ERFASSUNG);
   renderGrid('einzelGrid', state.currentPhase === 'abwehr' ? EINZEL_ABWEHR : EINZEL_ANGRIFF);
   renderEventList();
   updateLiveScore();
@@ -824,6 +826,9 @@ function renderPlayerStrip() {
 
 function toggleTwView(isTw) {
   const isAngriff = state.currentPhase !== 'abwehr';
+  const feRow = document.getElementById('fehlerEinzelRow');
+  feRow.style.display = isTw ? 'none' : '';
+  feRow.classList.toggle('phase-abwehr', !isAngriff);
   document.getElementById('wurfGroup').style.display = (!isTw && isAngriff) ? '' : 'none';
   document.getElementById('twGroup').style.display = isTw ? '' : 'none';
   document.getElementById('ballgewinnGroup').style.display = (!isTw && !isAngriff) ? '' : 'none';
