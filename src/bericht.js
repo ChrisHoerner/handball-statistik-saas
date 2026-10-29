@@ -190,7 +190,7 @@ export function kontrolliereBericht(analyse, kader, erfasst, spiel) {
  * acta:    [{ t, typ:'tor'|'tor7', kaderId|null, nr, name, stand }] in Spielzeit-Reihenfolge
  * erfasst: [{ id, spielerinId, name, zone, ts(ms) }] in Erfassungs-Reihenfolge
  */
-export const DOPPEL_SEKUNDEN = 15;
+export const DOPPEL_SEKUNDEN = 8;
 
 export function berechneAbgleich(acta, erfasst) {
   const A = acta.map(function (a) {
@@ -221,7 +221,7 @@ export function berechneAbgleich(acta, erfasst) {
   function naheAnderen(e) {
     return E.some(function (o) { return o !== e && Math.abs(o.ts - e.ts) <= DOPPEL_SEKUNDEN * 1000; });
   }
-  function verarbeiteLuecke(as, es, prevTs, nextTs) {
+  function verarbeiteLuecke(as, es, prevTs, nextTs, prevT, nextT) {
     const asRest = as.slice(), esRest = es.slice();
     const paare = [];
     // 1) gleiche Spielerin, aber 7m/Feld passt nicht
@@ -262,17 +262,18 @@ export function berechneAbgleich(acta, erfasst) {
         art: 'viel',
         erfasst: { id: e.id, spielerinId: e.spielerinId, name: e.name, zone: e.zone, ts: e.ts },
         standard: doppelt ? 'delete' : 'tofehl',
+        zeitVon: prevT, zeitBis: nextT,
         grund: doppelt ? 'Weniger als ' + DOPPEL_SEKUNDEN + ' s von einem anderen erfassten Treffer entfernt (vermutlich nicht rückgängig gemacht).' : ''
       });
     });
   }
 
-  let i0 = 0, j0 = 0, prevTs = null;
+  let i0 = 0, j0 = 0, prevTs = null, prevT = 0;
   treffer.forEach(function (p) {
-    verarbeiteLuecke(A.slice(i0, p[0]), E.slice(j0, p[1]), prevTs, E[p[1]].ts);
-    i0 = p[0] + 1; j0 = p[1] + 1; prevTs = E[p[1]].ts;
+    verarbeiteLuecke(A.slice(i0, p[0]), E.slice(j0, p[1]), prevTs, E[p[1]].ts, prevT, A[p[0]].t);
+    i0 = p[0] + 1; j0 = p[1] + 1; prevTs = E[p[1]].ts; prevT = A[p[0]].t;
   });
-  verarbeiteLuecke(A.slice(i0), E.slice(j0), prevTs, null);
+  verarbeiteLuecke(A.slice(i0), E.slice(j0), prevTs, null, prevT, 3600);
 
   // Nur Reihenfolge vertauscht (z. B. zwei Tablets): "fehlt" und "viel" derselben Spielerin/Tor-Art heben sich auf.
   const entfernen = {};
