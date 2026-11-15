@@ -18,11 +18,17 @@
     return m ? parseInt(m[1], 10) * 60 + parseInt(m[2], 10) : null;
   }
 
-  function kopfWert(items, label) {
+  // Mehrzeilige Werte (z. B. "23:25 (12-14), Sieger …" auf zwei Zeilen) liegen ±5 pt neben dem Label.
+  // Mit muster wird unter den Nachbarn der erste passende Eintrag genommen.
+  function kopfWert(items, label, muster) {
     const l = items.find(function (i) { return i.s.trim() === label; });
     if (!l) return '';
-    const kandidaten = items.filter(function (i) { return Math.abs(i.y - l.y) <= 3 && i.x > l.x + 5; })
-      .sort(function (a, b) { return a.x - b.x; });
+    const kandidaten = items.filter(function (i) { return Math.abs(i.y - l.y) <= (muster ? 8 : 3) && i.x > l.x + 5; })
+      .sort(function (a, b) { return Math.abs(a.y - l.y) - Math.abs(b.y - l.y) || a.x - b.x; });
+    if (muster) {
+      const t = kandidaten.find(function (i) { return muster.test(i.s.trim()); });
+      return t ? t.s.trim() : '';
+    }
     return kandidaten.length ? kandidaten[0].s.trim() : '';
   }
 
@@ -81,7 +87,7 @@
   function parseActaPages(pages) {
     const warnungen = [];
     const kopf = pages[0] || [];
-    const endstandText = kopfWert(kopf, 'Endstand');
+    const endstandText = kopfWert(kopf, 'Endstand', /^\d+:\d+\s*\(\d+-\d+\)/);
     const es = /^(\d+):(\d+)\s*\((\d+)-(\d+)\)/.exec(endstandText);
     const datumText = kopfWert(kopf, 'Datum');
     const dm = /(\d\d)\.(\d\d)\.(\d{4})/.exec(datumText);
