@@ -451,7 +451,8 @@ async function loadRosterFromBackend() {
       }
       if (!kaderEntry) {
         kaderEntry = { id: p.SpielerinID || uid(), Name: p.Name, Rückennummer: p.Rückennummer, Position: p.Position, synced: true };
-      } else {
+      } else if (kaderEntry.synced !== false) {
+        // Lokale, noch nicht synchronisierte Änderungen (z. B. gerade bearbeitete Spielerin) nicht überschreiben
         kaderEntry.Rückennummer = p.Rückennummer;
         kaderEntry.Position = p.Position;
       }
@@ -563,7 +564,10 @@ function openKaderForm(existing) {
   document.getElementById('kNummer').value = existing ? (existing.Rückennummer || '') : '';
   document.getElementById('kPosition').value = existing ? existing.Position : 'Feld';
   document.getElementById('kaderFormError').textContent = '';
-  document.getElementById('kaderForm').style.display = '';
+  const form = document.getElementById('kaderForm');
+  form.style.display = '';
+  form.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  document.getElementById('kName').focus();
 }
 
 function closeKaderForm() {
