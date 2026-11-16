@@ -9,6 +9,7 @@
  *   "<Nummer> sieben Meter geholt|verursacht", "<Nummer> zwei Minuten geholt|verursacht"
  *   "<Nummer> Block | Rausprellen | Pass abgefangen | technischer Fehler provoziert"
  *   Steuerung: "rückgängig", "erste Halbzeit", "zweite Halbzeit"
+ *   Aufstellung: "Aufstellung 1 7 9 12 3 5 20" (genau diese stehen auf dem Feld, alle anderen draußen)
  *   Wechsel:   "7 eingewechselt", "9 ausgewechselt", "7 für 9" (braucht laufende Videouhr)
  *   Videouhr:  "Start" / "Weiter", "Unterbrechung" / "Auszeit" / "Stopp", "Zeit zwölf dreißig", "Tempo hundertfünfzig"
  * Statt der Rückennummer geht auch ein eindeutiger Vorname.
@@ -123,6 +124,44 @@
     return { fehler: 'Keine Spielerin erkannt (Rückennummer sagen).' };
   }
 
+  // Aufstellung: Liste von Rückennummern/Vornamen -> Spielerinnen. Zusammengezogene Ziffern ("179") werden
+  // nur akzeptiert, wenn sie sich eindeutig in Rückennummern des Kaders zerlegen lassen.
+  function parseAufstellung(rest, roster) {
+    const nrs = {};
+    roster.forEach(function (p) { if (String(p.nr).trim() !== '') nrs[String(p.nr).trim()] = (nrs[String(p.nr).trim()] || []).concat(p); });
+    function zerlege(str) {
+      if (!str.length) return [[]];
+      let out = [];
+      [2, 1].forEach(function (len) {
+        const teil = str.slice(0, len);
+        if (teil.length === len && nrs[String(parseInt(teil, 10))] && String(parseInt(teil, 10)) === teil) {
+          zerlege(str.slice(len)).forEach(function (r) { out.push([teil].concat(r)); });
+        }
+      });
+      return out;
+    }
+    const gefunden = [];
+    const tokens = rest.split(' ').filter(function (w) { return w && !/^(und|nummer|nr|spielerinnen|spielerin)$/.test(w); });
+    for (let i = 0; i < tokens.length; i++) {
+      const w = tokens[i];
+      let teile = [w];
+      if (/^\d{3,}$/.test(w)) {
+        const z = zerlege(w);
+        if (z.length !== 1) return { fehler: 'Ziffern „' + w + '“ nicht eindeutig trennbar – Nummern einzeln sagen.' };
+        teile = z[0];
+      }
+      for (const tw of teile) {
+        const f = findeSpielerin([tw], roster);
+        if (f.fehler) return { fehler: f.fehler };
+        if (gefunden.some(function (p) { return p.id === f.spielerin.id; })) return { fehler: bezeichnung(f.spielerin) + ' doppelt genannt.' };
+        gefunden.push(f.spielerin);
+      }
+    }
+    if (!gefunden.length) return { fehler: 'Aufstellung: keine Spielerinnen erkannt.' };
+    if (gefunden.length > 7) return { fehler: 'Aufstellung: ' + gefunden.length + ' Spielerinnen genannt, höchstens 7 möglich.' };
+    return { spielerinnen: gefunden };
+  }
+
   function bezeichnung(p) { return (p.nr ? '#' + p.nr + ' ' : '') + p.name; }
 
   function parse(text, roster) {
@@ -132,6 +171,13 @@
 
     const uhr = parseUhr(t);
     if (uhr) return res(uhr);
+    const auf = /^(startaufstellung|aufstellung|auf dem feld)\s+(.+)$/.exec(t);
+    if (auf) {
+      const a = parseAufstellung(auf[2], roster);
+      if (a.fehler) return res({ ok: false, fehler: a.fehler });
+      return res({ ok: true, befehl: { typ: 'aufstellung', ids: a.spielerinnen.map(function (p) { return p.id; }) },
+        beschreibung: 'Aufstellung: ' + a.spielerinnen.map(function (p) { return p.nr ? '#' + p.nr : p.name; }).join(', ') });
+    }
     if (/\b(rueckgaengig|zurueck|loeschen)\b/.test(t)) return res({ ok: true, befehl: { typ: 'undo' }, beschreibung: 'Letzte Aktion rückgängig' });
     if (/\b(erste|1) halbzeit\b|\bhalbzeit (eins|1)\b/.test(t)) return res({ ok: true, befehl: { typ: 'halbzeit', hz: '1' }, beschreibung: '1. Halbzeit' });
     if (/\b(zweite|2) halbzeit\b|\bhalbzeit (zwei|2)\b/.test(t)) return res({ ok: true, befehl: { typ: 'halbzeit', hz: '2' }, beschreibung: '2. Halbzeit' });

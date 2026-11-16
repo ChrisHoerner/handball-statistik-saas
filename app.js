@@ -1121,6 +1121,18 @@ async function fuehreSprachBefehlAus(alternativen) {
   if (b.typ === 'undo') {
     if (recentEvents[0]) { const ev = recentEvents[0]; await undoEvent(ev); sprachMeldung('↩ Rückgängig: ' + playerName(ev.SpielerinID) + ' · ' + ev.Aktionstyp + (ev.Ergebnis ? ' (' + ev.Ergebnis + ')' : ''), 'ok'); }
     else sprachMeldung('Nichts zum Rückgängigmachen.', 'err');
+  } else if (b.typ === 'aufstellung') {
+    if (!state.currentGameId) { sprachMeldung('✖ Erst ein Spiel starten.', 'err'); return; }
+    // Uhr bei Bedarf auf den Anfang der aktuellen Halbzeit stellen (steht, bis „Start“ kommt)
+    if (!state.clock.aktiv) uhrSetze(state.currentHalbzeit === '2' ? 1800 : 0), uhrStopp();
+    const feld = await aufDemFeldIds();
+    const ziel = new Set(b.ids);
+    const raus = Array.from(feld).filter(function (id) { return !ziel.has(id); });
+    const rein = b.ids.filter(function (id) { return !feld.has(id); });
+    for (const id of raus) await addEvent('Auswechslung', '', id);
+    for (const id of rein) await addEvent('Einwechslung', '', id);
+    const n = b.ids.length;
+    sprachMeldung('✔ ' + treffer.r.beschreibung + ' · ' + rein.length + ' rein, ' + raus.length + ' raus · Uhr ' + uhrFormat(uhrExakt()) + (n !== 7 ? ' · ⚠ ' + n + ' statt 7 Spielerinnen' : ''), n !== 7 ? 'err' : 'ok');
   } else if (b.typ === 'wechsel') {
     if (!state.currentGameId) { sprachMeldung('✖ Erst ein Spiel starten.', 'err'); return; }
     if (!state.clock.aktiv) { sprachMeldung('✖ Einsatzzeit braucht die Videouhr: erst „Zeit …“ oder „Start“ sagen.', 'err'); return; }
@@ -1142,7 +1154,7 @@ async function fuehreSprachBefehlAus(alternativen) {
     if (btn) btn.click();
     // Videouhr (falls in Benutzung): 2. Halbzeit beginnt bei 30:00, 1. bei 0:00; Uhr wartet auf "Start"
     if (state.clock.aktiv) { uhrSetze(b.hz === '2' ? 1800 : 0); uhrStopp(); }
-    sprachMeldung('✔ ' + treffer.r.beschreibung + (state.clock.aktiv ? ' · Uhr steht auf ' + uhrFormat(uhrExakt()) + ' – „Start“ sagen' : ''), 'ok');
+    sprachMeldung('✔ ' + treffer.r.beschreibung + (state.clock.aktiv ? ' · Uhr steht auf ' + uhrFormat(uhrExakt()) + ' – „Aufstellung …“ ansagen, dann „Start“' : ''), 'ok');
   } else {
     if (!state.currentGameId) { sprachMeldung('✖ Erst ein Spiel starten.', 'err'); return; }
     state.selectedPlayerId = b.spielerinId;
