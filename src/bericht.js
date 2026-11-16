@@ -418,3 +418,31 @@ export function kaderMatcher(kader) {
   });
   return function (nr, name) { return nachName[normName(name)] || nachNr[String(nr)] || null; };
 }
+
+/* ---------- Einsatzzeit je Spielerin ----------
+ * ereignisse: [{ spielerinId, typ: 'ein' | 'aus', sz (Spielzeit in s) }] in Erfassungsreihenfolge.
+ * ende: Spielzeit, bis zu der noch auf dem Feld stehende Spielerinnen gezählt werden (1800 oder 3600).
+ * Rückgabe: { spieler: { [id]: { hz1, hz2, gesamt, bisEnde } }, hinweise: [] } (Sekunden) */
+export function berechneEinsatzzeit(ereignisse, ende) {
+  const offen = {}, spieler = {}, hinweise = [];
+  function get(id) { return spieler[id] || (spieler[id] = { hz1: 0, hz2: 0, gesamt: 0, bisEnde: false }); }
+  function addiere(id, von, bis) {
+    const s = get(id);
+    if (bis <= von) return;
+    const h1 = Math.max(0, Math.min(bis, 1800) - Math.min(von, 1800));
+    const h2 = Math.max(0, bis - Math.max(von, 1800));
+    s.hz1 += h1; s.hz2 += h2; s.gesamt += h1 + h2;
+  }
+  ereignisse.forEach(function (e) {
+    if (e.typ === 'ein') {
+      if (offen[e.spielerinId] !== undefined) { hinweise.push('Doppelte Einwechslung ignoriert.'); return; }
+      offen[e.spielerinId] = e.sz; get(e.spielerinId);
+    } else if (e.typ === 'aus') {
+      if (offen[e.spielerinId] === undefined) { hinweise.push('Auswechslung ohne Einwechslung ignoriert.'); return; }
+      addiere(e.spielerinId, offen[e.spielerinId], e.sz);
+      delete offen[e.spielerinId];
+    }
+  });
+  Object.keys(offen).forEach(function (id) { addiere(id, offen[id], ende); spieler[id].bisEnde = true; });
+  return { spieler: spieler, hinweise: hinweise };
+}

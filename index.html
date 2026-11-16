@@ -182,7 +182,9 @@
         <input type="text" id="uhrInput" placeholder="mm:ss" inputmode="numeric" aria-label="Videozeit setzen">
         <button class="secondary-btn" id="btnUhrSetzen">Setzen</button>
       </div>
-      <p class="hint">Videouhr (Spielzeit der Aktionen): Tempo wie im Video einstellen, dann „Start“, „Unterbrechung“/„Auszeit“, „Zeit zwölf dreißig“, „Tempo hundertfünfzig“.</p>
+      <div id="feldBar" class="hint"></div>
+      <p class="hint">Videouhr (Spielzeit der Aktionen): Tempo wie im Video einstellen, dann „Start“, „Unterbrechung“/„Auszeit“, „Zeit zwölf dreißig“, „Tempo hundertfünfzig“.
+        Einsatzzeit: „7 eingewechselt“, „9 ausgewechselt“, „7 für 9“ (bei Spielbeginn die Startaufstellung einwechseln).</p>
     </div>
 
     <div class="player-group-label">Feldspielerinnen</div>
@@ -262,6 +264,10 @@
     <div id="ausErgebnis"></div>
     <button class="secondary-btn" id="btnExportAuswertung" style="margin-top:0.8rem">Auswertung als CSV exportieren</button>
     <button class="secondary-btn" id="btnExportAktionen" style="margin-top:0.5rem">Aktionen dieses Spiels als CSV exportieren</button>
+
+    <h2 style="margin-top:1.4rem">Einsatzzeiten</h2>
+    <button class="secondary-btn" id="btnEinsatzzeit">Einsatzzeiten anzeigen</button>
+    <div id="einsatzErgebnis"></div>
 
     <h2 style="margin-top:1.4rem">Spielbericht</h2>
     <div id="berichtUpload" style="display:none">

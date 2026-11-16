@@ -366,6 +366,7 @@ function bindUI() {
   document.getElementById('btnExportAuswertung').addEventListener('click', exportAuswertungCSV);
   document.getElementById('btnExportAktionen').addEventListener('click', exportAktionenCSV);
   document.getElementById('btnBerichtAuswertung').addEventListener('click', showBerichtAuswertung);
+  document.getElementById('btnEinsatzzeit').addEventListener('click', showEinsatzzeit);
   document.getElementById('berichtFile').addEventListener('change', onBerichtFile);
   document.getElementById('btnAbgleich').addEventListener('click', ladeAbgleich);
 
@@ -807,6 +808,7 @@ async function renderLiveScreen() {
   picker.style.display = 'none';
   mainArea.style.display = '';
   uhrPruefeSpiel();
+  renderAufDemFeld();
   const game = await idbGet('games', state.currentGameId);
   document.getElementById('liveGameName').textContent = game ? (game.Gegner || '') : '';
   renderPlayerStrip();
@@ -969,6 +971,7 @@ async function addEvent(aktionstyp, ergebnis, spielerinId) {
   renderEventList();
   updateStatusBar();
   updateLiveScore();
+  renderAufDemFeld();
   trySync();
 }
 
@@ -984,6 +987,7 @@ async function undoEvent(ev) {
   renderEventList();
   updateStatusBar();
   updateLiveScore();
+  renderAufDemFeld();
   if (ev.synced) alert('Achtung: Diese Aktion war schon synchronisiert und muss im Google Sheet manuell gelöscht werden.');
 }
 
@@ -1064,6 +1068,28 @@ function uhrAnzeigen() {
   }
 }
 
+/* ---------- Wer steht auf dem Feld? (aus Ein-/Auswechslungen dieses Spiels) ---------- */
+async function aufDemFeldIds() {
+  const evs = (await idbGetAll('events')).filter(function (e) {
+    return e.SpielID === state.currentGameId && (e.Aktionstyp === 'Einwechslung' || e.Aktionstyp === 'Auswechslung');
+  }).sort(function (x, y) { return String(x.Zeitstempel).localeCompare(String(y.Zeitstempel)); });
+  const feld = new Set();
+  evs.forEach(function (e) { if (e.Aktionstyp === 'Einwechslung') feld.add(e.SpielerinID); else feld.delete(e.SpielerinID); });
+  return feld;
+}
+
+async function renderAufDemFeld() {
+  const el = document.getElementById('feldBar');
+  if (!el) return;
+  const ids = Array.from(await aufDemFeldIds());
+  if (!ids.length) { el.textContent = ''; return; }
+  const namen = ids.map(function (id) {
+    const p = state.roster.find(function (r) { return r.SpielerinID === id; });
+    return { nr: p ? p.Rückennummer : '', name: p ? p.Name : id };
+  }).sort(function (x, y) { return (parseInt(x.nr, 10) || 99) - (parseInt(y.nr, 10) || 99); });
+  el.textContent = 'Auf dem Feld (' + ids.length + '): ' + namen.map(function (n) { return n.nr ? '#' + n.nr : n.name; }).join(', ');
+}
+
 /* ---------- Spracheingabe (Browser-Spracherkennung, braucht Internet) ----------
  * Gedacht für das Nacherfassen am PC (ruhige Umgebung, Kopfhörer). Parser: sprache.js. */
 let sprachRec = null;
@@ -1095,6 +1121,16 @@ async function fuehreSprachBefehlAus(alternativen) {
   if (b.typ === 'undo') {
     if (recentEvents[0]) { const ev = recentEvents[0]; await undoEvent(ev); sprachMeldung('↩ Rückgängig: ' + playerName(ev.SpielerinID) + ' · ' + ev.Aktionstyp + (ev.Ergebnis ? ' (' + ev.Ergebnis + ')' : ''), 'ok'); }
     else sprachMeldung('Nichts zum Rückgängigmachen.', 'err');
+  } else if (b.typ === 'wechsel') {
+    if (!state.currentGameId) { sprachMeldung('✖ Erst ein Spiel starten.', 'err'); return; }
+    if (!state.clock.aktiv) { sprachMeldung('✖ Einsatzzeit braucht die Videouhr: erst „Zeit …“ oder „Start“ sagen.', 'err'); return; }
+    const feld = await aufDemFeldIds();
+    if (b.aus && !feld.has(b.aus)) { sprachMeldung('✖ ' + playerName(b.aus) + ' steht laut Erfassung nicht auf dem Feld – erst „eingewechselt“ erfassen.', 'err'); return; }
+    if (b.ein && feld.has(b.ein)) { sprachMeldung('✖ ' + playerName(b.ein) + ' steht schon auf dem Feld.', 'err'); return; }
+    if (b.aus) await addEvent('Auswechslung', '', b.aus);
+    if (b.ein) await addEvent('Einwechslung', '', b.ein);
+    const n = (await aufDemFeldIds()).size;
+    sprachMeldung('✔ ' + treffer.r.beschreibung + ' · ' + uhrFormat(uhrExakt()) + (n > 7 ? ' · ⚠ ' + n + ' Spielerinnen auf dem Feld' : ' · ' + n + ' auf dem Feld'), n > 7 ? 'err' : 'ok');
   } else if (b.typ === 'uhr') {
     if (b.aktion === 'start') uhrStart();
     else if (b.aktion === 'stopp') uhrStopp();
@@ -1757,6 +1793,49 @@ function renderBerichtAuswertung(el, data) {
     html += '</table>';
   }
   el.innerHTML = html;
+}
+
+/* ---------- Einsatzzeiten ---------- */
+function fmtDauer(sek) {
+  sek = Math.round(sek);
+  return Math.floor(sek / 60) + ':' + String(sek % 60).padStart(2, '0');
+}
+
+async function showEinsatzzeit() {
+  const el = document.getElementById('einsatzErgebnis');
+  const zeitraum = document.getElementById('ausZeitraum').value;
+  el.innerHTML = '<p class="aus-empty">Lade …</p>';
+  try {
+    const res = await authFetch(API_BASE + '?action=einsatzzeit&zeitraum=' + encodeURIComponent(zeitraum) + (zeitraum === 'runde' ? '&runde=' + encodeURIComponent(state.runde) : ''));
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    let html = '';
+    if (data.einzel) {
+      const sp = data.spiele[0];
+      if (!sp) html += '<p class="aus-empty">Für dieses Spiel liegen keine Einwechslungen mit Spielzeit vor. Erfassen per Sprache: „7 eingewechselt“, „9 ausgewechselt“ (Videouhr nötig).</p>';
+      else {
+        html += '<table class="aus-table"><tr><th>Spielerin</th><th>1. HZ</th><th>2. HZ</th><th>Gesamt</th></tr>';
+        sp.spielerinnen.forEach(function (p) {
+          html += '<tr><td>' + (p.nr ? '#' + escHtml(p.nr) + ' ' : '') + escHtml(p.name) + '</td><td>' + fmtDauer(p.hz1) + '</td><td>' + fmtDauer(p.hz2) + '</td><td><b>' + fmtDauer(p.gesamt) + '</b>' + (p.bisEnde ? ' *' : '') + '</td></tr>';
+        });
+        html += '</table><p class="hint">* ohne Auswechslung: gezählt bis ' + fmtDauer(sp.ende) + ' (Spielende).</p>';
+        if (sp.hinweise.length) html += '<p class="hint">Hinweis: ' + escHtml(sp.hinweise.join(' ')) + '</p>';
+      }
+    } else {
+      if (!data.summe.length) html += '<p class="aus-empty">In dieser Runde liegen keine Einwechslungen mit Spielzeit vor.</p>';
+      else {
+        html += '<table class="aus-table"><tr><th>Spielerin</th><th>Spiele</th><th>Gesamt</th><th>Ø je Einsatz</th></tr>';
+        data.summe.forEach(function (p) {
+          html += '<tr><td>' + (p.nr ? '#' + escHtml(p.nr) + ' ' : '') + escHtml(p.name) + '</td><td>' + p.spiele + '</td><td><b>' + fmtDauer(p.gesamt) + '</b></td><td>' + (p.spiele ? fmtDauer(p.gesamt / p.spiele) : '–') + '</td></tr>';
+        });
+        html += '</table><p class="hint">Nur Spiele mit erfassten Wechseln (' + data.spiele.length + ' von ' + (data.spiele.length + data.ohneDaten.length) + ').</p>';
+      }
+    }
+    if (data.ohneSpielzeit) html += '<p class="hint">' + data.ohneSpielzeit + ' Wechsel ohne Spielzeit wurden ignoriert.</p>';
+    el.innerHTML = html;
+  } catch (e) {
+    el.innerHTML = '<p class="aus-empty">Fehler: ' + escHtml(e.message) + '</p>';
+  }
 }
 
 /* ---------- Tore abgleichen (Spielbericht <-> Erfassung) ---------- */

@@ -9,6 +9,7 @@
  *   "<Nummer> sieben Meter geholt|verursacht", "<Nummer> zwei Minuten geholt|verursacht"
  *   "<Nummer> Block | Rausprellen | Pass abgefangen | technischer Fehler provoziert"
  *   Steuerung: "rückgängig", "erste Halbzeit", "zweite Halbzeit"
+ *   Wechsel:   "7 eingewechselt", "9 ausgewechselt", "7 für 9" (braucht laufende Videouhr)
  *   Videouhr:  "Start" / "Weiter", "Unterbrechung" / "Auszeit" / "Stopp", "Zeit zwölf dreißig", "Tempo hundertfünfzig"
  * Statt der Rückennummer geht auch ein eindeutiger Vorname.
  *
@@ -103,6 +104,27 @@
     return null;
   }
 
+  // tokens (normalisiert) -> genau eine Spielerin (Rückennummer, sonst eindeutiger Vorname)
+  function findeSpielerin(tokens, roster) {
+    const nummern = [];
+    tokens.forEach(function (w) { const n = zahlAusWort(w); if (n !== null) nummern.push(n); });
+    if (nummern.length > 1) return { fehler: 'Mehrere Zahlen erkannt (' + nummern.join(', ') + ').' };
+    if (nummern.length === 1) {
+      const treffer = roster.filter(function (p) { return String(p.nr).trim() === String(nummern[0]); });
+      if (!treffer.length) return { fehler: 'Nr. ' + nummern[0] + ' ist nicht im Kader dieses Spiels.' };
+      if (treffer.length > 1) return { fehler: 'Nr. ' + nummern[0] + ' ist doppelt vergeben.' };
+      return { spielerin: treffer[0] };
+    }
+    const namen = roster.filter(function (p) {
+      return normalisiere(p.name).split(' ').some(function (teil) { return teil.length >= 3 && tokens.indexOf(teil) !== -1; });
+    });
+    if (namen.length === 1) return { spielerin: namen[0] };
+    if (namen.length > 1) return { fehler: 'Name nicht eindeutig: ' + namen.map(function (p) { return p.name; }).join(', ') + '.' };
+    return { fehler: 'Keine Spielerin erkannt (Rückennummer sagen).' };
+  }
+
+  function bezeichnung(p) { return (p.nr ? '#' + p.nr + ' ' : '') + p.name; }
+
   function parse(text, roster) {
     let t = normalisiere(text);
     const res = function (o) { o.text = t; return o; };
@@ -123,7 +145,29 @@
       t = t.replace(a.re, ' ');
     });
     t = t.replace(/\s+/g, ' ').trim();
-    if (gefunden.length === 0) return res({ ok: false, fehler: 'Keine Aktion erkannt.' });
+    if (gefunden.length === 0) {
+      // Wechsel: "7 eingewechselt", "9 ausgewechselt", "7 für 9"
+      const bereinigt = t.replace(/\b(nummer|nr)\b/g, ' ').replace(/\s+/g, ' ').trim();
+      const fuer = /^(.+) fuer (.+)$/.exec(bereinigt);
+      if (fuer) {
+        const rein = findeSpielerin(fuer[1].split(' ').filter(Boolean), roster);
+        const raus = findeSpielerin(fuer[2].split(' ').filter(Boolean), roster);
+        if (rein.fehler) return res({ ok: false, fehler: 'Wechsel (rein): ' + rein.fehler });
+        if (raus.fehler) return res({ ok: false, fehler: 'Wechsel (raus): ' + raus.fehler });
+        if (rein.spielerin.id === raus.spielerin.id) return res({ ok: false, fehler: 'Wechsel: rein und raus sind dieselbe Spielerin.' });
+        return res({ ok: true, befehl: { typ: 'wechsel', ein: rein.spielerin.id, aus: raus.spielerin.id }, beschreibung: bezeichnung(rein.spielerin) + ' für ' + bezeichnung(raus.spielerin) });
+      }
+      const ein = /\b(eingewechselt|einwechslung|einwechseln|rein|kommt)\b/.test(bereinigt);
+      const aus = /\b(ausgewechselt|auswechslung|auswechseln|raus|geht)\b/.test(bereinigt);
+      if (ein !== aus) {
+        const rest = bereinigt.replace(/\b(eingewechselt|einwechslung|einwechseln|rein|kommt|ausgewechselt|auswechslung|auswechseln|raus|geht)\b/g, ' ').split(' ').filter(Boolean);
+        const f = findeSpielerin(rest, roster);
+        if (f.fehler) return res({ ok: false, fehler: f.fehler });
+        return res({ ok: true, befehl: { typ: 'wechsel', ein: ein ? f.spielerin.id : null, aus: aus ? f.spielerin.id : null },
+          beschreibung: bezeichnung(f.spielerin) + (ein ? ' eingewechselt' : ' ausgewechselt') });
+      }
+      return res({ ok: false, fehler: 'Keine Aktion erkannt.' });
+    }
     if (gefunden.length > 1) return res({ ok: false, fehler: 'Mehrere Aktionen erkannt (' + gefunden.map(function (g) { return g.typ; }).join(', ') + ') – bitte einzeln sprechen.' });
     const akt = gefunden[0];
 
@@ -139,24 +183,9 @@
     if (!akt.wurf && zone) return res({ ok: false, fehler: akt.typ + ': Zone „' + zone + '“ passt nicht dazu.' });
 
     // Spielerin: Rückennummer, sonst Vorname
-    const tokens = t.split(' ').filter(Boolean);
-    const nummern = [];
-    tokens.forEach(function (w) { const n = zahlAusWort(w); if (n !== null) nummern.push(n); });
-    let kandidat = null;
-    if (nummern.length > 1) return res({ ok: false, fehler: 'Mehrere Zahlen erkannt (' + nummern.join(', ') + ').' });
-    if (nummern.length === 1) {
-      const treffer = roster.filter(function (p) { return String(p.nr).trim() === String(nummern[0]); });
-      if (!treffer.length) return res({ ok: false, fehler: 'Nr. ' + nummern[0] + ' ist nicht im Kader dieses Spiels.' });
-      if (treffer.length > 1) return res({ ok: false, fehler: 'Nr. ' + nummern[0] + ' ist doppelt vergeben.' });
-      kandidat = treffer[0];
-    } else {
-      const namen = roster.filter(function (p) {
-        return normalisiere(p.name).split(' ').some(function (teil) { return teil.length >= 3 && tokens.indexOf(teil) !== -1; });
-      });
-      if (namen.length === 1) kandidat = namen[0];
-      else if (namen.length > 1) return res({ ok: false, fehler: 'Name nicht eindeutig: ' + namen.map(function (p) { return p.name; }).join(', ') + '.' });
-      else return res({ ok: false, fehler: 'Keine Spielerin erkannt (Rückennummer sagen).' });
-    }
+    const fs = findeSpielerin(t.split(' ').filter(Boolean), roster);
+    if (fs.fehler) return res({ ok: false, fehler: fs.fehler });
+    const kandidat = fs.spielerin;
 
     if (akt.gruppe === 'tw' && !kandidat.tw) return res({ ok: false, fehler: akt.typ + ' gilt nur für Torhüterinnen, ' + kandidat.name + ' ist Feldspielerin.' });
     if (akt.gruppe === 'feld' && kandidat.tw) return res({ ok: false, fehler: akt.typ + ' gilt nur für Feldspielerinnen, ' + kandidat.name + ' ist Torhüterin.' });

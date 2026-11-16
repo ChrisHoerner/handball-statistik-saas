@@ -15,7 +15,7 @@
  *  2. Ersten Kunden + Zugangscodes anlegen (siehe seed.sql)
  */
 
-import { analysiereBericht, kontrolliereBericht, berechneAbgleich, berechneGegentorAbgleich, kaderMatcher, normName, SEGMENT_NAMEN } from './bericht.js';
+import { analysiereBericht, kontrolliereBericht, berechneAbgleich, berechneGegentorAbgleich, berechneEinsatzzeit, kaderMatcher, normName, SEGMENT_NAMEN } from './bericht.js';
 
 const SESSION_TTL_TAGE = 180;
 
@@ -553,6 +553,58 @@ function normNameServer(s) {
   return String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ').trim();
 }
 
+/* ---------- Einsatzzeiten (aus Ein-/Auswechslungen mit Videouhr-Spielzeit) ---------- */
+async function handleEinsatzzeit(env, session, url) {
+  await stelleSpielzeitSpalteSicher(env);
+  const zeitraum = url.searchParams.get('zeitraum') || '';
+  const runde = url.searchParams.get('runde') || '';
+  if (!zeitraum) return json({ error: 'zeitraum fehlt' }, 400);
+
+  let spiele;
+  if (zeitraum === 'runde') {
+    spiele = (await env.DB.prepare('SELECT id, datum, gegner FROM spiele WHERE mannschaft_id = ? AND runde = ? ORDER BY datum')
+      .bind(session.mannschaft_id, runde).all()).results || [];
+  } else {
+    spiele = (await env.DB.prepare('SELECT id, datum, gegner FROM spiele WHERE mannschaft_id = ? AND id = ?')
+      .bind(session.mannschaft_id, zeitraum).all()).results || [];
+  }
+  const kader = (await env.DB.prepare('SELECT id, name, rueckennummer FROM kader WHERE mannschaft_id = ?')
+    .bind(session.mannschaft_id).all()).results || [];
+  const kaderById = {};
+  kader.forEach(function (k) { kaderById[k.id] = k; });
+
+  const summe = {};
+  const ohneDaten = [];
+  let ohneSpielzeit = 0;
+  const einzelSpiele = [];
+  for (const sp of spiele) {
+    const rows = (await env.DB.prepare(
+      `SELECT spielerin_id, aktionstyp, spielzeit FROM aktionen
+       WHERE mannschaft_id = ? AND spiel_id = ? AND aktionstyp IN ('Einwechslung','Auswechslung')
+       ORDER BY zeitstempel, id`
+    ).bind(session.mannschaft_id, sp.id).all()).results || [];
+    const mitZeit = rows.filter(function (r) { return r.spielzeit !== null && r.spielzeit !== undefined; });
+    ohneSpielzeit += rows.length - mitZeit.length;
+    if (!mitZeit.length) { ohneDaten.push({ spielId: sp.id, datum: sp.datum, gegner: sp.gegner }); continue; }
+    const mx = (await env.DB.prepare('SELECT MAX(spielzeit) AS m FROM aktionen WHERE mannschaft_id = ? AND spiel_id = ?')
+      .bind(session.mannschaft_id, sp.id).first()) || {};
+    const ende = (mx.m || 0) > 1800 || mitZeit.some(function (r) { return r.spielzeit > 1800; }) ? 3600 : 1800;
+    const erg = berechneEinsatzzeit(mitZeit.map(function (r) {
+      return { spielerinId: r.spielerin_id, typ: r.aktionstyp === 'Einwechslung' ? 'ein' : 'aus', sz: r.spielzeit };
+    }), ende);
+    const liste = Object.keys(erg.spieler).map(function (id) {
+      const k = kaderById[id] || { name: id, rueckennummer: '' };
+      const e = erg.spieler[id];
+      const z = summe[id] || (summe[id] = { id: id, name: k.name, nr: k.rueckennummer || '', hz1: 0, hz2: 0, gesamt: 0, spiele: 0 });
+      z.hz1 += e.hz1; z.hz2 += e.hz2; z.gesamt += e.gesamt; if (e.gesamt > 0) z.spiele++;
+      return { id: id, name: k.name, nr: k.rueckennummer || '', hz1: e.hz1, hz2: e.hz2, gesamt: e.gesamt, bisEnde: e.bisEnde };
+    }).sort(function (a, b) { return b.gesamt - a.gesamt; });
+    einzelSpiele.push({ spielId: sp.id, datum: sp.datum, gegner: sp.gegner, ende: ende, spielerinnen: liste, hinweise: erg.hinweise });
+  }
+  const gesamt = Object.keys(summe).map(function (id) { return summe[id]; }).sort(function (a, b) { return b.gesamt - a.gesamt; });
+  return json({ einzel: zeitraum !== 'runde', spiele: einzelSpiele, summe: gesamt, ohneDaten: ohneDaten, ohneSpielzeit: ohneSpielzeit });
+}
+
 /* ---------- Tore-Abgleich Spielbericht <-> Erfassung (nur Admin) ---------- */
 async function handleAbgleich(env, session, url) {
   if (session.rolle !== 'admin') return json({ error: 'Nur Admin darf Tore abgleichen.' }, 403);
@@ -763,6 +815,9 @@ async function handleApi(request, env, url) {
   }
   if (request.method === 'POST' && action === 'abgleichAnwenden') {
     return handleAbgleichAnwenden(request, env, session);
+  }
+  if (request.method === 'GET' && action === 'einsatzzeit') {
+    return handleEinsatzzeit(env, session, url);
   }
   if (request.method === 'GET' && action === 'berichtAuswertung') {
     return handleBerichtAuswertung(env, session, url);
