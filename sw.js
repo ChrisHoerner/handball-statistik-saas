@@ -1,4 +1,4 @@
-const CACHE_NAME = 'spielstatistik-v72';
+const CACHE_NAME = 'spielstatistik-v73';
 const APP_SHELL = [
   './',
   './index.html',

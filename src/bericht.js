@@ -197,6 +197,11 @@ export const DOPPEL_SEKUNDEN = 8;
  * Zwischen zwei Messpunkten wird linear interpoliert, die Halbzeit der Aktion begrenzt den Bereich.
  * Ohne Messpunkte: Abstand zur ersten erfassten Aktion derselben Halbzeit. */
 function schaetzeSpielzeit(e, prevTs, prevT, nextTs, nextT, ersteTsProHz) {
+  // Mit der Videouhr erfasste Spielzeit ist exakt (kein Schätzen nötig)
+  if (e.spielzeit !== null && e.spielzeit !== undefined && e.spielzeit !== '') {
+    const sz = Number(e.spielzeit);
+    return { von: sz, bis: sz, ca: sz, exakt: true };
+  }
   const hz2 = String(e.halbzeit) === '2';
   const halbStart = hz2 ? 1800 : 0, halbEnde = hz2 ? 3600 : 1800;
   let von = Math.max(prevT == null ? 0 : prevT, halbStart);

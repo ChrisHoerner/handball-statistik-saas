@@ -806,6 +806,7 @@ async function renderLiveScreen() {
 
   picker.style.display = 'none';
   mainArea.style.display = '';
+  uhrPruefeSpiel();
   const game = await idbGet('games', state.currentGameId);
   document.getElementById('liveGameName').textContent = game ? (game.Gegner || '') : '';
   renderPlayerStrip();
@@ -959,6 +960,7 @@ async function addEvent(aktionstyp, ergebnis, spielerinId) {
     Ergebnis: ergebnis,
     Quelle: state.nutzerName || 'manuell',
     Zeitstempel: new Date().toISOString(),
+    Spielzeit: state.clock && state.clock.aktiv ? uhrSek() : '',
     synced: false
   };
   await idbPut('events', event);
@@ -1001,6 +1003,67 @@ function renderEventList() {
   });
 }
 
+/* ---------- Videouhr (Spielzeit beim Nacherfassen) ----------
+ * Läuft mit der eingestellten Abspielgeschwindigkeit des Videos. Start/Stopp/Zeit/Tempo per Sprache oder Button.
+ * Solange die Uhr nie gestartet wurde, bleibt die Spielzeit der Aktionen leer. */
+state.clock = { aktiv: false, laeuft: false, basis: 0, seit: 0, tempo: 1, spielId: null };
+try { const t = parseFloat(localStorage.getItem('videoTempo')); if (t >= 0.25 && t <= 3) state.clock.tempo = t; } catch (e) { /* ignorieren */ }
+
+function uhrExakt() {
+  const c = state.clock;
+  return c.basis + (c.laeuft ? (Date.now() - c.seit) / 1000 * c.tempo : 0);
+}
+function uhrSek() { return Math.floor(uhrExakt()); }
+
+function uhrFormat(sek) {
+  sek = Math.max(0, Math.floor(sek));
+  return Math.floor(sek / 60) + ':' + String(sek % 60).padStart(2, '0');
+}
+function uhrStart() {
+  const c = state.clock;
+  if (c.laeuft) return;
+  if (!c.aktiv) { c.aktiv = true; c.basis = state.currentHalbzeit === '2' ? 1800 : 0; }
+  c.seit = Date.now(); c.laeuft = true;
+  uhrAnzeigen();
+}
+function uhrStopp() {
+  const c = state.clock;
+  c.basis = uhrExakt(); c.laeuft = false;
+  uhrAnzeigen();
+}
+function uhrSetze(sek) {
+  const c = state.clock;
+  c.aktiv = true; c.basis = sek; c.seit = Date.now();
+  uhrAnzeigen();
+}
+function uhrTempo(prozent) {
+  const c = state.clock;
+  c.basis = uhrExakt(); c.seit = Date.now();
+  c.tempo = prozent / 100;
+  try { localStorage.setItem('videoTempo', String(c.tempo)); } catch (e) { /* ignorieren */ }
+  uhrAnzeigen();
+}
+function uhrPruefeSpiel() {
+  const c = state.clock;
+  if (c.spielId !== state.currentGameId) { c.spielId = state.currentGameId; c.aktiv = false; c.laeuft = false; c.basis = 0; uhrAnzeigen(); }
+}
+function uhrAnzeigen() {
+  const c = state.clock;
+  const a = document.getElementById('uhrAnzeige');
+  if (!a) return;
+  a.textContent = uhrFormat(uhrExakt());
+  a.className = c.laeuft ? 'laeuft' : (c.aktiv ? 'steht' : '');
+  document.getElementById('btnUhr').textContent = c.laeuft ? '⏸ Stopp' : '▶ Start';
+  const sel = document.getElementById('uhrTempo');
+  const p = String(Math.round(c.tempo * 100));
+  if (sel.value !== p) {
+    if (!Array.prototype.some.call(sel.options, function (o) { return o.value === p; })) {
+      const o = document.createElement('option'); o.value = p; o.textContent = p + ' %'; sel.appendChild(o);
+    }
+    sel.value = p;
+  }
+}
+
 /* ---------- Spracheingabe (Browser-Spracherkennung, braucht Internet) ----------
  * Gedacht für das Nacherfassen am PC (ruhige Umgebung, Kopfhörer). Parser: sprache.js. */
 let sprachRec = null;
@@ -1032,10 +1095,18 @@ async function fuehreSprachBefehlAus(alternativen) {
   if (b.typ === 'undo') {
     if (recentEvents[0]) { const ev = recentEvents[0]; await undoEvent(ev); sprachMeldung('↩ Rückgängig: ' + playerName(ev.SpielerinID) + ' · ' + ev.Aktionstyp + (ev.Ergebnis ? ' (' + ev.Ergebnis + ')' : ''), 'ok'); }
     else sprachMeldung('Nichts zum Rückgängigmachen.', 'err');
+  } else if (b.typ === 'uhr') {
+    if (b.aktion === 'start') uhrStart();
+    else if (b.aktion === 'stopp') uhrStopp();
+    else if (b.aktion === 'setze') uhrSetze(b.sek);
+    else if (b.aktion === 'tempo') uhrTempo(b.prozent);
+    sprachMeldung('✔ ' + treffer.r.beschreibung + ' · Uhr ' + uhrFormat(uhrExakt()) + (state.clock.laeuft ? ' läuft' : ' steht') + ' · Tempo ' + Math.round(state.clock.tempo * 100) + ' %', 'ok');
   } else if (b.typ === 'halbzeit') {
     const btn = document.querySelector('#halbzeitToggle button[data-hz="' + b.hz + '"]');
     if (btn) btn.click();
-    sprachMeldung('✔ ' + treffer.r.beschreibung, 'ok');
+    // Videouhr (falls in Benutzung): 2. Halbzeit beginnt bei 30:00, 1. bei 0:00; Uhr wartet auf "Start"
+    if (state.clock.aktiv) { uhrSetze(b.hz === '2' ? 1800 : 0); uhrStopp(); }
+    sprachMeldung('✔ ' + treffer.r.beschreibung + (state.clock.aktiv ? ' · Uhr steht auf ' + uhrFormat(uhrExakt()) + ' – „Start“ sagen' : ''), 'ok');
   } else {
     if (!state.currentGameId) { sprachMeldung('✖ Erst ein Spiel starten.', 'err'); return; }
     state.selectedPlayerId = b.spielerinId;
@@ -1094,6 +1165,16 @@ function initSprache() {
   document.getElementById('btnSprache').addEventListener('click', function () {
     if (sprachAktiv) { stopSprache(); sprachMeldung('Beendet.', ''); } else startSprache();
   });
+  document.getElementById('btnUhr').addEventListener('click', function () { if (state.clock.laeuft) uhrStopp(); else uhrStart(); });
+  document.getElementById('uhrTempo').addEventListener('change', function (e) { uhrTempo(parseInt(e.target.value, 10)); });
+  document.getElementById('btnUhrSetzen').addEventListener('click', function () {
+    const m = /^(\d{1,2}):?(\d{2})?$/.exec(document.getElementById('uhrInput').value.trim().replace(/\s+/g, ''));
+    if (!m) { sprachMeldung('Zeit als mm:ss eingeben (z. B. 12:30).', 'err'); return; }
+    uhrSetze(parseInt(m[1], 10) * 60 + (m[2] ? parseInt(m[2], 10) : 0));
+    document.getElementById('uhrInput').value = '';
+  });
+  uhrAnzeigen();
+  setInterval(function () { if (state.clock.laeuft) uhrAnzeigen(); }, 250);
 }
 
 /* ---------- Sync ---------- */
@@ -1446,9 +1527,9 @@ async function exportAktionenCSV() {
     const res = await authFetch(API_BASE + '?action=aktionenSpiel&spielId=' + encodeURIComponent(zeitraum));
     const data = await res.json();
     if (data.error) throw new Error(data.error);
-    const rows = [['AktionID', 'SpielID', 'SpielerinID', 'Halbzeit', 'Aktionstyp', 'Ergebnis', 'Quelle', 'Zeitstempel']];
+    const rows = [['AktionID', 'SpielID', 'SpielerinID', 'Halbzeit', 'Aktionstyp', 'Ergebnis', 'Quelle', 'Zeitstempel', 'Spielzeit_Sek']];
     data.forEach(function (a) {
-      rows.push([a.AktionID, a.SpielID, a.SpielerinID, a.Halbzeit, a.Aktionstyp, a.Ergebnis, a.Quelle, a.Zeitstempel]);
+      rows.push([a.AktionID, a.SpielID, a.SpielerinID, a.Halbzeit, a.Aktionstyp, a.Ergebnis, a.Quelle, a.Zeitstempel, a.Spielzeit == null ? '' : a.Spielzeit]);
     });
     const filename = sanitizeFilenamePart(info.datum) + '_' + sanitizeFilenamePart(info.gegner) + '_Aktionen.csv';
     downloadCSV(filename, rows);
@@ -1766,7 +1847,7 @@ function renderAbgleich(el, data, spielId) {
         const btn = abEl('button', '', 'Ergänzen');
         btn.addEventListener('click', function () {
           if (!sel.value) { status.textContent = 'Zone ist Pflicht.'; return; }
-          wendeAbgleichAn(spielId, { op: 'add', spielerinId: k.bericht.kaderId, zone: sel.value, halbzeit: k.halbzeit, ts: k.ts }, status);
+          wendeAbgleichAn(spielId, { op: 'add', spielerinId: k.bericht.kaderId, zone: sel.value, halbzeit: k.halbzeit, ts: k.ts, spielzeit: k.bericht.t }, status);
         });
         row.appendChild(sel); row.appendChild(btn); card.appendChild(row);
       }
@@ -1805,7 +1886,7 @@ function renderAbgleich(el, data, spielId) {
       card.appendChild(abEl('span', 'tag tag-viel', 'Zu viel erfasst'));
       card.appendChild(abEl('p', '', 'Erfasst: ' + k.erfasst.name + ' · Treffer · ' + k.erfasst.zone));
       card.appendChild(abEl('p', 'dim', 'um ' + abZeitStempel(k.erfasst.ts) + ' Uhr · im Bericht kein passendes Tor'));
-      card.appendChild(abEl('p', '', 'Spielzeit: ca. ' + fmtMinSek(k.zeit.ca) + ' (Bereich ' + fmtMinSek(k.zeit.von) + '–' + fmtMinSek(k.zeit.bis) + ')'));
+      card.appendChild(abEl('p', '', (k.zeit.exakt ? 'Spielzeit (Videouhr): ' + fmtMinSek(k.zeit.ca) : 'Spielzeit: ca. ' + fmtMinSek(k.zeit.ca) + ' (Bereich ' + fmtMinSek(k.zeit.von) + '–' + fmtMinSek(k.zeit.bis) + ')')));
       if (k.grund) card.appendChild(abEl('p', 'dim', k.grund));
       const sel = document.createElement('select');
       const optDel = abEl('option', '', 'Löschen'); optDel.value = 'delete';
@@ -1842,7 +1923,7 @@ function renderGegentorAbgleich(el, data, spielId) {
       card.appendChild(abEl('span', 'tag tag-viel', 'Gegentor zu viel erfasst'));
       card.appendChild(abEl('p', '', 'Erfasst: ' + k.erfasst.name + ' · Gegentor · ' + k.erfasst.zone));
       card.appendChild(abEl('p', 'dim', 'um ' + abZeitStempel(k.erfasst.ts) + ' Uhr · im Bericht kein passendes Gegentor'));
-      card.appendChild(abEl('p', '', 'Spielzeit: ca. ' + fmtMinSek(k.zeit.ca) + ' (Bereich ' + fmtMinSek(k.zeit.von) + '–' + fmtMinSek(k.zeit.bis) + ')'));
+      card.appendChild(abEl('p', '', (k.zeit.exakt ? 'Spielzeit (Videouhr): ' + fmtMinSek(k.zeit.ca) : 'Spielzeit: ca. ' + fmtMinSek(k.zeit.ca) + ' (Bereich ' + fmtMinSek(k.zeit.von) + '–' + fmtMinSek(k.zeit.bis) + ')')));
       if (k.grund) card.appendChild(abEl('p', 'dim', k.grund));
       const sel = document.createElement('select');
       const optDel = abEl('option', '', 'Löschen'); optDel.value = 'gtdelete';
@@ -1871,7 +1952,7 @@ function renderGegentorAbgleich(el, data, spielId) {
         const btn = abEl('button', '', 'Ergänzen');
         btn.addEventListener('click', function () {
           if (!tw.value || !zone.value) { status.textContent = 'Torhüterin und Zone sind Pflicht.'; return; }
-          wendeAbgleichAn(spielId, { op: 'gtadd', spielerinId: tw.value, zone: zone.value, halbzeit: k.halbzeit, ts: k.ts }, status);
+          wendeAbgleichAn(spielId, { op: 'gtadd', spielerinId: tw.value, zone: zone.value, halbzeit: k.halbzeit, ts: k.ts, spielzeit: k.bericht.t }, status);
         });
         row.appendChild(tw); row.appendChild(zone); row.appendChild(btn); card.appendChild(row);
       }
@@ -1897,7 +1978,7 @@ async function exportAllCSV() {
       { name: 'kader', spalten: ['SpielerinID', 'Name', 'Rückennummer', 'Position'], rows: data.kader },
       { name: 'kader_runde', spalten: ['SpielerinID', 'Runde', 'Status'], rows: data.kader_runde },
       { name: 'spiele', spalten: ['SpielID', 'Datum', 'Gegner', 'Runde', 'Tore_eigene', 'Tore_gegner', 'Status'], rows: data.spiele },
-      { name: 'aktionen', spalten: ['AktionID', 'SpielID', 'SpielerinID', 'Halbzeit', 'Aktionstyp', 'Ergebnis', 'Quelle', 'Zeitstempel'], rows: data.aktionen },
+      { name: 'aktionen', spalten: ['AktionID', 'SpielID', 'SpielerinID', 'Halbzeit', 'Aktionstyp', 'Ergebnis', 'Quelle', 'Zeitstempel', 'Spielzeit'], rows: data.aktionen },
       { name: 'spielbericht_ereignisse', spalten: ['SpielID', 'Eigene_Seite', 'Sekunden', 'Team', 'Typ', 'Nr', 'Name'], rows: data.spielbericht_ereignisse }
     ];
 

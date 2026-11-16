@@ -206,6 +206,7 @@ async function handleSync(request, env, session) {
     // Hat das Spiel einen Spielbericht, kommen "2min verursacht" ausschließlich daraus --
     // spät synchronisierte Tablet-Einträge werden bestätigt, aber nicht gespeichert (sonst doppelt).
     await stelleSpielberichtSchemaSicher(env);
+    await stelleSpielzeitSpalteSicher(env);
     const berichtSpiele = {};
     for (const a of body.aktionen) {
       if (a.Aktionstyp !== '2min verursacht' || berichtSpiele[a.SpielID] !== undefined) continue;
@@ -219,11 +220,11 @@ async function handleSync(request, env, session) {
         continue;
       }
       await env.DB.prepare(
-        `INSERT INTO aktionen (id, mannschaft_id, spiel_id, spielerin_id, halbzeit, aktionstyp, ergebnis, quelle, zeitstempel)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO aktionen (id, mannschaft_id, spiel_id, spielerin_id, halbzeit, aktionstyp, ergebnis, quelle, zeitstempel, spielzeit)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO NOTHING`
       ).bind(
-        a.AktionID, session.mannschaft_id, a.SpielID, a.SpielerinID, a.Halbzeit, a.Aktionstyp, a.Ergebnis, a.Quelle, a.Zeitstempel
+        a.AktionID, session.mannschaft_id, a.SpielID, a.SpielerinID, a.Halbzeit, a.Aktionstyp, a.Ergebnis, a.Quelle, a.Zeitstempel, spielzeitWert(a.Spielzeit)
       ).run();
       results.aktionen.push(a.AktionID);
     }
@@ -233,9 +234,10 @@ async function handleSync(request, env, session) {
 }
 
 async function handleAktionenSpiel(env, session, spielId) {
+  await stelleSpielzeitSpalteSicher(env);
   const rows = await env.DB.prepare(
     `SELECT id AS AktionID, spiel_id AS SpielID, spielerin_id AS SpielerinID, halbzeit AS Halbzeit,
-            aktionstyp AS Aktionstyp, ergebnis AS Ergebnis, quelle AS Quelle, zeitstempel AS Zeitstempel
+            aktionstyp AS Aktionstyp, ergebnis AS Ergebnis, quelle AS Quelle, zeitstempel AS Zeitstempel, spielzeit AS Spielzeit
      FROM aktionen WHERE mannschaft_id = ? AND spiel_id = ?`
   ).bind(session.mannschaft_id, spielId).all();
   return json(rows.results || []);
@@ -319,8 +321,9 @@ async function handleExportAll(env, session) {
   const spiele = await env.DB.prepare(
     'SELECT id AS SpielID, datum AS Datum, gegner AS Gegner, runde AS Runde, tore_eigene AS Tore_eigene, tore_gegner AS Tore_gegner, status AS Status FROM spiele WHERE mannschaft_id = ?'
   ).bind(session.mannschaft_id).all();
+  await stelleSpielzeitSpalteSicher(env);
   const aktionen = await env.DB.prepare(
-    'SELECT id AS AktionID, spiel_id AS SpielID, spielerin_id AS SpielerinID, halbzeit AS Halbzeit, aktionstyp AS Aktionstyp, ergebnis AS Ergebnis, quelle AS Quelle, zeitstempel AS Zeitstempel FROM aktionen WHERE mannschaft_id = ?'
+    'SELECT id AS AktionID, spiel_id AS SpielID, spielerin_id AS SpielerinID, halbzeit AS Halbzeit, aktionstyp AS Aktionstyp, ergebnis AS Ergebnis, quelle AS Quelle, zeitstempel AS Zeitstempel, spielzeit AS Spielzeit FROM aktionen WHERE mannschaft_id = ?'
   ).bind(session.mannschaft_id).all();
 
   await stelleSpielberichtSchemaSicher(env);
@@ -361,6 +364,23 @@ async function stelleSpielberichtSchemaSicher(env) {
   ).run();
   await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_spielbericht_mannschaft ON spielbericht(mannschaft_id)').run();
   spielberichtSchemaBereit = true;
+}
+
+/* Spielzeit (Sekunden, optional) je Aktion: wird beim Nacherfassen mit der Videouhr gesetzt.
+ * Die Spalte wird beim ersten Zugriff automatisch ergänzt (keine manuelle Migration nötig). */
+let spielzeitSpalteBereit = false;
+async function stelleSpielzeitSpalteSicher(env) {
+  if (spielzeitSpalteBereit) return;
+  try {
+    await env.DB.prepare('ALTER TABLE aktionen ADD COLUMN spielzeit INTEGER').run();
+  } catch (e) {
+    if (!/duplicate column/i.test(String(e && e.message))) throw e; // Spalte existiert schon -> ok
+  }
+  spielzeitSpalteBereit = true;
+}
+function spielzeitWert(v) {
+  const n = Number(v);
+  return v !== '' && v !== null && v !== undefined && Number.isFinite(n) && n >= 0 && n <= 7200 ? Math.round(n) : null;
 }
 
 const BERICHT_TYPEN = ['tor', 'tor7', 'fehl7', 'zwei', 'gelb', 'rot', 'auszeit'];
@@ -537,6 +557,7 @@ function normNameServer(s) {
 async function handleAbgleich(env, session, url) {
   if (session.rolle !== 'admin') return json({ error: 'Nur Admin darf Tore abgleichen.' }, 403);
   await stelleSpielberichtSchemaSicher(env);
+  await stelleSpielzeitSpalteSicher(env);
   const spielId = url.searchParams.get('spielId');
   if (!spielId) return json({ error: 'spielId fehlt' }, 400);
   const row = await env.DB.prepare('SELECT daten FROM spielbericht WHERE spiel_id = ? AND mannschaft_id = ?')
@@ -567,11 +588,11 @@ async function handleAbgleich(env, session, url) {
 
   const zonenSql = WURF_ZONEN.map(function () { return '?'; }).join(',');
   const rows = (await env.DB.prepare(
-    `SELECT id, spielerin_id, aktionstyp, zeitstempel, halbzeit FROM aktionen
+    `SELECT id, spielerin_id, aktionstyp, zeitstempel, halbzeit, spielzeit FROM aktionen
      WHERE mannschaft_id = ? AND spiel_id = ? AND ergebnis = 'Treffer' AND aktionstyp IN (${zonenSql})`
   ).bind(session.mannschaft_id, spielId, ...WURF_ZONEN).all()).results || [];
   const erfasst = rows.map(function (r) {
-    return { id: r.id, spielerinId: r.spielerin_id, name: nameById[r.spielerin_id] || r.spielerin_id, zone: r.aktionstyp, ts: Date.parse(r.zeitstempel) || 0, halbzeit: r.halbzeit };
+    return { id: r.id, spielerinId: r.spielerin_id, name: nameById[r.spielerin_id] || r.spielerin_id, zone: r.aktionstyp, ts: Date.parse(r.zeitstempel) || 0, halbzeit: r.halbzeit, spielzeit: r.spielzeit };
   }).sort(function (a, b) { return a.ts - b.ts || (a.id < b.id ? -1 : 1); });
 
   // Erste erfasste Aktion je Halbzeit (beliebiger Typ) -> Notanker, falls kein Tor übereinstimmt
@@ -582,11 +603,11 @@ async function handleAbgleich(env, session, url) {
   const ergebnis = berechneAbgleich(acta, erfasst, ersteTsProHz);
 
   const gtRows = (await env.DB.prepare(
-    `SELECT id, spielerin_id, aktionstyp, zeitstempel, halbzeit FROM aktionen
+    `SELECT id, spielerin_id, aktionstyp, zeitstempel, halbzeit, spielzeit FROM aktionen
      WHERE mannschaft_id = ? AND spiel_id = ? AND ergebnis = 'Gegentor' AND aktionstyp IN (${zonenSql})`
   ).bind(session.mannschaft_id, spielId, ...WURF_ZONEN).all()).results || [];
   const gtErfasst = gtRows.map(function (r) {
-    return { id: r.id, spielerinId: r.spielerin_id, name: nameById[r.spielerin_id] || r.spielerin_id, zone: r.aktionstyp, ts: Date.parse(r.zeitstempel) || 0, halbzeit: r.halbzeit };
+    return { id: r.id, spielerinId: r.spielerin_id, name: nameById[r.spielerin_id] || r.spielerin_id, zone: r.aktionstyp, ts: Date.parse(r.zeitstempel) || 0, halbzeit: r.halbzeit, spielzeit: r.spielzeit };
   });
   const gt = berechneGegentorAbgleich(actaGegner, gtErfasst, ergebnis.anker, ersteTsProHz);
   const torhueterinnen = kader.filter(function (k) { return k.position === 'TW'; }).map(function (k) { return { id: k.id, name: k.name, nr: k.rueckennummer || '' }; });
@@ -603,6 +624,7 @@ async function handleAbgleichAnwenden(request, env, session) {
   const op = body.op || {};
   if (!spielId || !op.op) return json({ error: 'spielId und op sind nötig.' }, 400);
   const quelle = 'Spielbericht-Abgleich';
+  await stelleSpielzeitSpalteSicher(env);
 
   async function holeTreffer(aktionId) {
     const a = await env.DB.prepare('SELECT id, aktionstyp, ergebnis FROM aktionen WHERE id = ? AND mannschaft_id = ? AND spiel_id = ?')
@@ -620,9 +642,9 @@ async function handleAbgleichAnwenden(request, env, session) {
     if (!(await pruefeSpielerin(op.spielerinId))) return json({ error: 'Spielerin nicht gefunden.' }, 404);
     const ts = Number(op.ts) > 0 ? new Date(Number(op.ts)).toISOString() : new Date().toISOString();
     await env.DB.prepare(
-      `INSERT INTO aktionen (id, mannschaft_id, spiel_id, spielerin_id, halbzeit, aktionstyp, ergebnis, quelle, zeitstempel)
-       VALUES (?, ?, ?, ?, ?, ?, 'Treffer', ?, ?)`
-    ).bind(crypto.randomUUID(), session.mannschaft_id, spielId, op.spielerinId, op.halbzeit === '2' ? '2' : '1', op.zone, quelle, ts).run();
+      `INSERT INTO aktionen (id, mannschaft_id, spiel_id, spielerin_id, halbzeit, aktionstyp, ergebnis, quelle, zeitstempel, spielzeit)
+       VALUES (?, ?, ?, ?, ?, ?, 'Treffer', ?, ?, ?)`
+    ).bind(crypto.randomUUID(), session.mannschaft_id, spielId, op.spielerinId, op.halbzeit === '2' ? '2' : '1', op.zone, quelle, ts, spielzeitWert(op.spielzeit)).run();
     return json({ status: 'ok' });
   }
 
@@ -631,9 +653,9 @@ async function handleAbgleichAnwenden(request, env, session) {
     if (!(await pruefeSpielerin(op.spielerinId))) return json({ error: 'Torhüterin nicht gefunden.' }, 404);
     const ts = Number(op.ts) > 0 ? new Date(Number(op.ts)).toISOString() : new Date().toISOString();
     await env.DB.prepare(
-      `INSERT INTO aktionen (id, mannschaft_id, spiel_id, spielerin_id, halbzeit, aktionstyp, ergebnis, quelle, zeitstempel)
-       VALUES (?, ?, ?, ?, ?, ?, 'Gegentor', ?, ?)`
-    ).bind(crypto.randomUUID(), session.mannschaft_id, spielId, op.spielerinId, op.halbzeit === '2' ? '2' : '1', op.zone, quelle, ts).run();
+      `INSERT INTO aktionen (id, mannschaft_id, spiel_id, spielerin_id, halbzeit, aktionstyp, ergebnis, quelle, zeitstempel, spielzeit)
+       VALUES (?, ?, ?, ?, ?, ?, 'Gegentor', ?, ?, ?)`
+    ).bind(crypto.randomUUID(), session.mannschaft_id, spielId, op.spielerinId, op.halbzeit === '2' ? '2' : '1', op.zone, quelle, ts, spielzeitWert(op.spielzeit)).run();
     return json({ status: 'ok' });
   }
   if (op.op === 'gtdelete' || op.op === 'gttoparade') {

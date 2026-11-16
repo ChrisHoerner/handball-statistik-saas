@@ -172,6 +172,17 @@
     <div id="sprachBar" style="display:none">
       <button class="secondary-btn" id="btnSprache">🎤 Spracheingabe starten</button>
       <div id="sprachStatus" class="sprach-status"></div>
+      <div id="uhrBar">
+        <span id="uhrAnzeige">0:00</span>
+        <button class="secondary-btn" id="btnUhr">▶ Start</button>
+        <select id="uhrTempo" aria-label="Abspielgeschwindigkeit des Videos">
+          <option value="50">50 %</option><option value="75">75 %</option><option value="100">100 %</option>
+          <option value="125">125 %</option><option value="150">150 %</option><option value="175">175 %</option><option value="200">200 %</option>
+        </select>
+        <input type="text" id="uhrInput" placeholder="mm:ss" inputmode="numeric" aria-label="Videozeit setzen">
+        <button class="secondary-btn" id="btnUhrSetzen">Setzen</button>
+      </div>
+      <p class="hint">Videouhr (Spielzeit der Aktionen): Tempo wie im Video einstellen, dann „Start“, „Unterbrechung“/„Auszeit“, „Zeit zwölf dreißig“, „Tempo hundertfünfzig“.</p>
     </div>
 
     <div class="player-group-label">Feldspielerinnen</div>

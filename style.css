@@ -345,3 +345,10 @@ nav.tabbar button.active { color: var(--accent); }
 .sprach-status { min-height: 1.4rem; margin-top: 0.4rem; padding: 0.5rem 0.7rem; border-radius: 0.5rem; background: var(--panel); font-size: 1rem; color: var(--text-dim); }
 .sprach-status.ok { color: var(--hit); border-left: 4px solid var(--hit); }
 .sprach-status.err { color: var(--miss); border-left: 4px solid var(--miss); }
+
+#uhrBar { display: flex; align-items: center; gap: 0.5rem; margin-top: 0.5rem; flex-wrap: wrap; }
+#uhrAnzeige { font-size: 1.6rem; font-weight: 700; font-variant-numeric: tabular-nums; min-width: 4.5rem; color: var(--text-dim); }
+#uhrAnzeige.laeuft { color: var(--hit); }
+#uhrAnzeige.steht { color: var(--warn); }
+#uhrBar select { width: auto; padding: 0.5rem; }
+#uhrBar input[type="text"] { width: 5rem; padding: 0.5rem; }

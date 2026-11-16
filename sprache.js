@@ -9,6 +9,7 @@
  *   "<Nummer> sieben Meter geholt|verursacht", "<Nummer> zwei Minuten geholt|verursacht"
  *   "<Nummer> Block | Rausprellen | Pass abgefangen | technischer Fehler provoziert"
  *   Steuerung: "rückgängig", "erste Halbzeit", "zweite Halbzeit"
+ *   Videouhr:  "Start" / "Weiter", "Unterbrechung" / "Auszeit" / "Stopp", "Zeit zwölf dreißig", "Tempo hundertfünfzig"
  * Statt der Rückennummer geht auch ein eindeutiger Vorname.
  *
  * roster: [{ id, name, nr, tw }]  (nur Spielerinnen dieses Spiels)
@@ -64,11 +65,51 @@
     { re: /\b(konter|gegenstoss)\b/, zone: 'Konter' }
   ];
 
+  // "hundertfünfzig", "150", "anderthalb", "doppelt" -> Prozent (25..300) oder null
+  function prozentAusText(tokens) {
+    const j = tokens.join('');
+    if (/^\d{2,3}$/.test(j)) return parseInt(j, 10);
+    if (j === 'anderthalb') return 150;
+    if (j === 'doppelt' || j === 'doppeltes') return 200;
+    if (j === 'normal') return 100;
+    if (j === 'halb') return 50;
+    const m = /^(zwei)?hundert(.*)$/.exec(j);
+    if (m) {
+      const rest = m[2] ? zahlAusWort(m[2]) : 0;
+      return rest === null ? null : (m[1] ? 200 : 100) + rest;
+    }
+    const z = zahlAusWort(j);
+    return z;
+  }
+
+  // Uhr-Befehle (Videozeit): start / stopp / zeit mm ss / tempo prozent
+  function parseUhr(t) {
+    if (/^(start|los|weiter|anpfiff|spielbeginn)$/.test(t)) return { ok: true, befehl: { typ: 'uhr', aktion: 'start' }, beschreibung: 'Uhr läuft' };
+    if (/^(unterbrechung|unterbrochen|stopp|stop|auszeit|pause|halt)$/.test(t)) return { ok: true, befehl: { typ: 'uhr', aktion: 'stopp' }, beschreibung: 'Uhr angehalten' };
+    let m = /^zeit (.+)$/.exec(t);
+    if (m) {
+      const zahlen = m[1].split(' ').filter(function (w) { return !/^(uhr|minuten|minute|sekunden|sekunde|und|null)$/.test(w) || w === 'null'; })
+        .map(zahlAusWort).filter(function (n) { return n !== null; });
+      const mm = zahlen[0], ss = zahlen.length > 1 ? zahlen[1] : 0;
+      if (!zahlen.length || zahlen.length > 2 || mm > 60 || ss > 59) return { ok: false, fehler: 'Zeit nicht verstanden (z. B. „Zeit zwölf dreißig“).' };
+      return { ok: true, befehl: { typ: 'uhr', aktion: 'setze', sek: mm * 60 + ss }, beschreibung: 'Zeit ' + mm + ':' + String(ss).padStart(2, '0') };
+    }
+    m = /^(tempo|geschwindigkeit|speed) (.+)$/.exec(t);
+    if (m) {
+      const p = prozentAusText(m[2].split(' '));
+      if (p === null || p < 25 || p > 300) return { ok: false, fehler: 'Tempo nicht verstanden (z. B. „Tempo hundertfünfzig“).' };
+      return { ok: true, befehl: { typ: 'uhr', aktion: 'tempo', prozent: p }, beschreibung: 'Tempo ' + p + ' %' };
+    }
+    return null;
+  }
+
   function parse(text, roster) {
     let t = normalisiere(text);
     const res = function (o) { o.text = t; return o; };
     if (!t) return res({ ok: false, fehler: 'Nichts verstanden.' });
 
+    const uhr = parseUhr(t);
+    if (uhr) return res(uhr);
     if (/\b(rueckgaengig|zurueck|loeschen)\b/.test(t)) return res({ ok: true, befehl: { typ: 'undo' }, beschreibung: 'Letzte Aktion rückgängig' });
     if (/\b(erste|1) halbzeit\b|\bhalbzeit (eins|1)\b/.test(t)) return res({ ok: true, befehl: { typ: 'halbzeit', hz: '1' }, beschreibung: '1. Halbzeit' });
     if (/\b(zweite|2) halbzeit\b|\bhalbzeit (zwei|2)\b/.test(t)) return res({ ok: true, befehl: { typ: 'halbzeit', hz: '2' }, beschreibung: '2. Halbzeit' });
@@ -127,7 +168,7 @@
     return res({ ok: true, befehl: { typ: 'event', spielerinId: kandidat.id, aktionstyp: akt.typ, ergebnis: '' }, beschreibung: label + ' · ' + akt.typ });
   }
 
-  const api = { parse: parse, normalisiere: normalisiere, zahlAusWort: zahlAusWort };
+  const api = { parse: parse, prozentAusText: prozentAusText, normalisiere: normalisiere, zahlAusWort: zahlAusWort };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.SpracheParser = api;
 })(typeof self !== 'undefined' ? self : this);
