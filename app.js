@@ -1190,7 +1190,9 @@ function auswertungZoneTileHtml(zone, hz1, hz2, gesamt, isTW) {
 function summeAlleZonen(stats) {
   let v = 0, e = 0;
   WURF_ZONEN.forEach(function (z) { v += stats[z + '_Versuche'] || 0; e += stats[z + '_Erfolg'] || 0; });
-  return { versuche: v, erfolg: e, fehl: v - e, quote: v ? (Math.round((e / v) * 1000) / 10) + '%' : '–' };
+  let f = 0;
+  FEHLER.forEach(function (k) { f += stats[k] || 0; });
+  return { versuche: v, erfolg: e, fehl: v - e, eigeneFehler: f, quote: v ? (Math.round((e / v) * 1000) / 10) + '%' : '–' };
 }
 
 function auswertungGesamtHtml(hz1, hz2, gesamt, isTW) {
@@ -1198,10 +1200,10 @@ function auswertungGesamtHtml(hz1, hz2, gesamt, isTW) {
   const missLabel = isTW ? 'Gegentore' : 'Fehlwürfe';
   function zeile(label, stats) {
     const s = summeAlleZonen(stats);
-    return '<tr><td>' + label + '</td><td>' + s.versuche + '</td><td>' + s.erfolg + '</td><td>' + s.fehl + '</td><td>' + s.quote + '</td></tr>';
+    return '<tr><td>' + label + '</td><td>' + s.versuche + '</td><td>' + s.erfolg + '</td><td>' + s.fehl + '</td><td>' + s.quote + '</td><td>' + s.eigeneFehler + '</td></tr>';
   }
   return '<div class="zone-tile ausz-tile" style="margin-bottom:0.8rem"><div class="zone-label">Gesamt (alle Zonen)</div>' +
-    '<table class="ausz-table"><tr><th></th><th>Würfe</th><th>' + erfolgLabel + '</th><th>' + missLabel + '</th><th>Quote</th></tr>' +
+    '<table class="ausz-table"><tr><th></th><th>Würfe</th><th>' + erfolgLabel + '</th><th>' + missLabel + '</th><th>Quote</th><th>Eig. Fehler</th></tr>' +
     zeile('HZ1', hz1) + zeile('HZ2', hz2) + zeile('Gesamt', gesamt) + '</table></div>';
 }
 
@@ -1268,10 +1270,10 @@ function downloadCSV(filename, rows) {
 
 function statsRowsForCSV(hz1, hz2, gesamt, isTW) {
   const out = [];
-  out.push(['Gesamt (alle Zonen)', 'Halbzeit', 'Würfe', isTW ? 'Paraden' : 'Treffer', isTW ? 'Gegentore' : 'Fehlwürfe', 'Quote']);
+  out.push(['Gesamt (alle Zonen)', 'Halbzeit', 'Würfe', isTW ? 'Paraden' : 'Treffer', isTW ? 'Gegentore' : 'Fehlwürfe', 'Quote', 'Eigene Fehler']);
   [['HZ1', hz1], ['HZ2', hz2], ['Gesamt', gesamt]].forEach(function (pair) {
     const sm = summeAlleZonen(pair[1]);
-    out.push(['Alle Zonen', pair[0], sm.versuche, sm.erfolg, sm.fehl, sm.quote === '–' ? '' : sm.quote]);
+    out.push(['Alle Zonen', pair[0], sm.versuche, sm.erfolg, sm.fehl, sm.quote === '–' ? '' : sm.quote, sm.eigeneFehler]);
   });
   out.push([]);
   out.push(['Zone', 'Halbzeit', isTW ? 'Paraden' : 'Treffer', isTW ? 'Gegentore' : 'Fehlwurf', 'Quote']);
