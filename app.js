@@ -370,6 +370,7 @@ function bindUI() {
   document.getElementById('btnAbgleich').addEventListener('click', ladeAbgleich);
 
   document.getElementById('syncBtn').addEventListener('click', function () { trySync(true); });
+  initSprache();
 
   document.querySelectorAll('#halbzeitToggle button').forEach(function (btn) {
     btn.addEventListener('click', function () {
@@ -392,6 +393,7 @@ function bindUI() {
 }
 
 function showScreen(name) {
+  if (name !== 'live' && typeof stopSprache === 'function') stopSprache();
   document.querySelectorAll('.screen').forEach(function (s) { s.classList.remove('active'); });
   document.getElementById('screen-' + name).classList.add('active');
   document.querySelectorAll('nav.tabbar .tab').forEach(function (b) { b.classList.toggle('active', b.dataset.screen === name); });
@@ -944,13 +946,14 @@ function renderGrid(elementId, items) {
 
 const recentEvents = [];
 
-async function addEvent(aktionstyp, ergebnis) {
+async function addEvent(aktionstyp, ergebnis, spielerinId) {
   if (!state.currentGameId) { alert('Erst ein Spiel starten (Tab "Spiel").'); return; }
-  if (!state.selectedPlayerId) { alert('Erst eine Spielerin oben auswählen.'); return; }
+  const wer = spielerinId || state.selectedPlayerId;
+  if (!wer) { alert('Erst eine Spielerin oben auswählen.'); return; }
   const event = {
     AktionID: uid(),
     SpielID: state.currentGameId,
-    SpielerinID: state.selectedPlayerId,
+    SpielerinID: wer,
     Halbzeit: state.currentHalbzeit,
     Aktionstyp: aktionstyp,
     Ergebnis: ergebnis,
@@ -972,6 +975,16 @@ function playerName(id) {
   return p ? p.Name : id;
 }
 
+async function undoEvent(ev) {
+  await idbDelete('events', ev.AktionID);
+  const idx = recentEvents.indexOf(ev);
+  if (idx !== -1) recentEvents.splice(idx, 1);
+  renderEventList();
+  updateStatusBar();
+  updateLiveScore();
+  if (ev.synced) alert('Achtung: Diese Aktion war schon synchronisiert und muss im Google Sheet manuell gelöscht werden.');
+}
+
 function renderEventList() {
   const ul = document.getElementById('eventList');
   ul.innerHTML = '';
@@ -982,17 +995,104 @@ function renderEventList() {
     const undoBtn = document.createElement('button');
     undoBtn.className = 'undo-btn';
     undoBtn.textContent = '↩ Rückgängig';
-    undoBtn.addEventListener('click', async function () {
-      await idbDelete('events', ev.AktionID);
-      const idx = recentEvents.indexOf(ev);
-      if (idx !== -1) recentEvents.splice(idx, 1);
-      renderEventList();
-      updateStatusBar();
-      updateLiveScore();
-      if (ev.synced) alert('Achtung: Diese Aktion war schon synchronisiert und muss im Google Sheet manuell gelöscht werden.');
-    });
+    undoBtn.addEventListener('click', function () { undoEvent(ev); });
     li.appendChild(undoBtn);
     ul.appendChild(li);
+  });
+}
+
+/* ---------- Spracheingabe (Browser-Spracherkennung, braucht Internet) ----------
+ * Gedacht für das Nacherfassen am PC (ruhige Umgebung, Kopfhörer). Parser: sprache.js. */
+let sprachRec = null;
+let sprachAktiv = false;
+
+function sprachRoster() {
+  const list = state.activeRosterNames
+    ? state.roster.filter(function (p) { return state.activeRosterNames.indexOf(p.Name) !== -1; })
+    : state.roster;
+  return list.map(function (p) { return { id: p.SpielerinID, name: p.Name, nr: p.Rückennummer || '', tw: p.Position === 'TW' }; });
+}
+
+function sprachMeldung(text, art) {
+  const el = document.getElementById('sprachStatus');
+  el.textContent = text;
+  el.className = 'sprach-status' + (art ? ' ' + art : '');
+}
+
+async function fuehreSprachBefehlAus(alternativen) {
+  const roster = sprachRoster();
+  let erstes = null, treffer = null;
+  for (const t of alternativen) {
+    const r = SpracheParser.parse(t, roster);
+    if (!erstes) erstes = { r: r, t: t };
+    if (r.ok) { treffer = { r: r, t: t }; break; }
+  }
+  if (!treffer) { sprachMeldung('✖ „' + erstes.t + '“ – ' + erstes.r.fehler, 'err'); return; }
+  const b = treffer.r.befehl;
+  if (b.typ === 'undo') {
+    if (recentEvents[0]) { const ev = recentEvents[0]; await undoEvent(ev); sprachMeldung('↩ Rückgängig: ' + playerName(ev.SpielerinID) + ' · ' + ev.Aktionstyp + (ev.Ergebnis ? ' (' + ev.Ergebnis + ')' : ''), 'ok'); }
+    else sprachMeldung('Nichts zum Rückgängigmachen.', 'err');
+  } else if (b.typ === 'halbzeit') {
+    const btn = document.querySelector('#halbzeitToggle button[data-hz="' + b.hz + '"]');
+    if (btn) btn.click();
+    sprachMeldung('✔ ' + treffer.r.beschreibung, 'ok');
+  } else {
+    if (!state.currentGameId) { sprachMeldung('✖ Erst ein Spiel starten.', 'err'); return; }
+    state.selectedPlayerId = b.spielerinId;
+    renderPlayerStrip();
+    const p = state.roster.find(function (r) { return r.SpielerinID === b.spielerinId; });
+    toggleTwView(p ? p.Position === 'TW' : false);
+    await addEvent(b.aktionstyp, b.ergebnis, b.spielerinId);
+    sprachMeldung('✔ ' + treffer.r.beschreibung + ' · HZ' + state.currentHalbzeit + '   („' + treffer.t + '“)', 'ok');
+  }
+}
+
+function startSprache() {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) return;
+  const btn = document.getElementById('btnSprache');
+  sprachRec = new SR();
+  sprachRec.lang = 'de-DE';
+  sprachRec.continuous = true;
+  sprachRec.interimResults = false;
+  sprachRec.maxAlternatives = 3;
+  sprachRec.onresult = function (ev) {
+    for (let i = ev.resultIndex; i < ev.results.length; i++) {
+      if (!ev.results[i].isFinal) continue;
+      const alt = [];
+      for (let j = 0; j < ev.results[i].length; j++) alt.push(ev.results[i][j].transcript);
+      fuehreSprachBefehlAus(alt);
+    }
+  };
+  sprachRec.onerror = function (ev) {
+    if (ev.error === 'no-speech' || ev.error === 'aborted') return;
+    if (ev.error === 'not-allowed' || ev.error === 'service-not-allowed') { sprachMeldung('Mikrofon nicht erlaubt (Browser-Einstellung für diese Seite prüfen).', 'err'); stopSprache(); return; }
+    if (ev.error === 'network') { sprachMeldung('Keine Verbindung zur Spracherkennung (Internet nötig).', 'err'); stopSprache(); return; }
+    sprachMeldung('Spracherkennung: ' + ev.error, 'err');
+  };
+  sprachRec.onend = function () {
+    // Chrome beendet die Erkennung nach längerer Stille von selbst -> neu starten
+    if (sprachAktiv) setTimeout(function () { try { sprachRec.start(); } catch (e) { /* läuft schon */ } }, 300);
+  };
+  sprachAktiv = true;
+  try { sprachRec.start(); } catch (e) { sprachMeldung('Start nicht möglich: ' + e.message, 'err'); sprachAktiv = false; return; }
+  btn.textContent = '⏹ Spracheingabe beenden';
+  btn.classList.add('active');
+  sprachMeldung('Hört zu … z. B. „sieben Treffer neun Meter“, „rückgängig“, „zweite Halbzeit“.', '');
+}
+
+function stopSprache() {
+  sprachAktiv = false;
+  if (sprachRec) { try { sprachRec.stop(); } catch (e) { /* ignorieren */ } sprachRec = null; }
+  const btn = document.getElementById('btnSprache');
+  if (btn) { btn.textContent = '🎤 Spracheingabe starten'; btn.classList.remove('active'); }
+}
+
+function initSprache() {
+  if (!(window.SpeechRecognition || window.webkitSpeechRecognition)) return; // Bereich bleibt ausgeblendet
+  document.getElementById('sprachBar').style.display = '';
+  document.getElementById('btnSprache').addEventListener('click', function () {
+    if (sprachAktiv) { stopSprache(); sprachMeldung('Beendet.', ''); } else startSprache();
   });
 }
 

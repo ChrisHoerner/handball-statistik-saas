@@ -1,10 +1,11 @@
-const CACHE_NAME = 'spielstatistik-v71';
+const CACHE_NAME = 'spielstatistik-v72';
 const APP_SHELL = [
   './',
   './index.html',
   './style.css',
   './app.js',
   './acta.js',
+  './sprache.js',
   './manifest.json',
   './icons/icon-192.png',
   './icons/icon-512.png'
