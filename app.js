@@ -1207,7 +1207,13 @@ function stopSprache() {
   if (btn) { btn.textContent = '🎤 Spracheingabe starten'; btn.classList.remove('active'); }
 }
 
+// Tablet/Handy (Touch ohne Maus): Spracheingabe und Videouhr sind fürs Nacherfassen am PC gedacht
+function istTouchGeraet() {
+  try { return window.matchMedia('(hover: none) and (pointer: coarse)').matches; } catch (e) { return false; }
+}
+
 function initSprache() {
+  if (istTouchGeraet()) return; // Bereich bleibt ausgeblendet (spart Platz in der Live-Erfassung)
   if (!(window.SpeechRecognition || window.webkitSpeechRecognition)) return; // Bereich bleibt ausgeblendet
   document.getElementById('sprachBar').style.display = '';
   document.getElementById('btnSprache').addEventListener('click', function () {

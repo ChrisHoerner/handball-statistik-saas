@@ -352,3 +352,6 @@ nav.tabbar button.active { color: var(--accent); }
 #uhrAnzeige.steht { color: var(--warn); }
 #uhrBar select { width: auto; padding: 0.5rem; }
 #uhrBar input[type="text"] { width: 5rem; padding: 0.5rem; }
+
+/* Spracheingabe/Videouhr nur am PC (Maus), nicht auf Tablet/Handy */
+@media (hover: none) and (pointer: coarse) { #sprachBar { display: none !important; } }
