@@ -1186,8 +1186,27 @@ function auswertungZoneTileHtml(zone, hz1, hz2, gesamt, isTW) {
     '</table></div>';
 }
 
+/* Summe über alle Zonen (inkl. 7m): Treffer/Fehlwürfe bzw. Paraden/Gegentore je HZ1, HZ2, Gesamt. */
+function summeAlleZonen(stats) {
+  let v = 0, e = 0;
+  WURF_ZONEN.forEach(function (z) { v += stats[z + '_Versuche'] || 0; e += stats[z + '_Erfolg'] || 0; });
+  return { versuche: v, erfolg: e, fehl: v - e, quote: v ? (Math.round((e / v) * 1000) / 10) + '%' : '–' };
+}
+
+function auswertungGesamtHtml(hz1, hz2, gesamt, isTW) {
+  const erfolgLabel = isTW ? 'Paraden' : 'Treffer';
+  const missLabel = isTW ? 'Gegentore' : 'Fehlwürfe';
+  function zeile(label, stats) {
+    const s = summeAlleZonen(stats);
+    return '<tr><td>' + label + '</td><td>' + s.versuche + '</td><td>' + s.erfolg + '</td><td>' + s.fehl + '</td><td>' + s.quote + '</td></tr>';
+  }
+  return '<div class="zone-tile ausz-tile" style="margin-bottom:0.8rem"><div class="zone-label">Gesamt (alle Zonen)</div>' +
+    '<table class="ausz-table"><tr><th></th><th>Würfe</th><th>' + erfolgLabel + '</th><th>' + missLabel + '</th><th>Quote</th></tr>' +
+    zeile('HZ1', hz1) + zeile('HZ2', hz2) + zeile('Gesamt', gesamt) + '</table></div>';
+}
+
 function auswertungCourtHtml(hz1, hz2, gesamt, isTW) {
-  let html = '';
+  let html = auswertungGesamtHtml(hz1, hz2, gesamt, isTW);
   COURT_ROWS.forEach(function (pair) {
     html += '<div class="court-row court-row-2">';
     pair.forEach(function (zone) { html += auswertungZoneTileHtml(zone, hz1, hz2, gesamt, isTW); });
@@ -1249,6 +1268,12 @@ function downloadCSV(filename, rows) {
 
 function statsRowsForCSV(hz1, hz2, gesamt, isTW) {
   const out = [];
+  out.push(['Gesamt (alle Zonen)', 'Halbzeit', 'Würfe', isTW ? 'Paraden' : 'Treffer', isTW ? 'Gegentore' : 'Fehlwürfe', 'Quote']);
+  [['HZ1', hz1], ['HZ2', hz2], ['Gesamt', gesamt]].forEach(function (pair) {
+    const sm = summeAlleZonen(pair[1]);
+    out.push(['Alle Zonen', pair[0], sm.versuche, sm.erfolg, sm.fehl, sm.quote === '–' ? '' : sm.quote]);
+  });
+  out.push([]);
   out.push(['Zone', 'Halbzeit', isTW ? 'Paraden' : 'Treffer', isTW ? 'Gegentore' : 'Fehlwurf', 'Quote']);
   WURF_ZONEN.forEach(function (z) {
     [['HZ1', hz1], ['HZ2', hz2], ['Gesamt', gesamt]].forEach(function (pair) {
